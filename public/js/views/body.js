@@ -155,16 +155,53 @@ function stat(sLabel, sValue, sUnit) {
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function prettyDay(sIso) { return new Date(sIso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
 
-function pickImage(sDate, sAngle, tOnDone) {
-  const oInput = h('input', { type: 'file', accept: 'image/*', style: 'display:none' });
-  oInput.addEventListener('change', async () => {
-    const oFile = oInput.files && oInput.files[0];
-    if (!oFile) return;
-    toast('Uploading…');
-    try { await api.uploadProgressPhoto(oFile, sDate, sAngle); toast('Photo added'); tOnDone(); }
-    catch (tErr) { toast(tErr.message || 'Upload failed'); }
+// Pick several photos at once, then review (assign an angle to each, shared
+// date) and upload them all in one go.
+function pickImages(sDefaultDate, tOnDone) {
+  const oInput = h('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none' });
+  oInput.addEventListener('change', () => {
+    const aFiles = oInput.files ? [...oInput.files] : [];
+    if (aFiles.length) openReview(aFiles, sDefaultDate, tOnDone);
   });
   oInput.click();
+}
+
+function openReview(aFiles, sDefaultDate, tOnDone) {
+  const aUrls = [];
+  openSheet('Add ' + aFiles.length + ' photo' + (aFiles.length === 1 ? '' : 's'), (tBody, tClose) => {
+    const oDate = h('input', { type: 'date', value: sDefaultDate });
+    const aAngleSel = aFiles.map((oF, i) => {
+      const oUrl = URL.createObjectURL(oF); aUrls.push(oUrl);
+      // default angles cycle front → side → back → other for a quick batch
+      return { sel: h('select', {}, ANGLES.map((a) =>
+        h('option', { value: a, text: cap(a), selected: a === ANGLES[i % ANGLES.length] }))), url: oUrl };
+    });
+    const oStatus = h('p.faint', { style: 'font-size:12.5px;margin:0 0 8px' });
+
+    async function uploadAll(tBtn) {
+      tBtn.disabled = true;
+      let iOk = 0;
+      for (let i = 0; i < aFiles.length; i += 1) {
+        oStatus.textContent = 'Uploading ' + (i + 1) + ' of ' + aFiles.length + '…';
+        try { await api.uploadProgressPhoto(aFiles[i], oDate.value || sDefaultDate, aAngleSel[i].sel.value); iOk += 1; }
+        catch (tErr) { /* keep going; report at end */ }
+      }
+      toast(iOk + ' photo' + (iOk === 1 ? '' : 's') + ' added' + (iOk < aFiles.length ? ' (' + (aFiles.length - iOk) + ' failed)' : ''));
+      tClose(); tOnDone();
+    }
+
+    const oBtn = h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Upload all', style: 'margin-top:6px' });
+    oBtn.addEventListener('click', () => uploadAll(oBtn));
+
+    mount(tBody, [
+      h('label.field', {}, [h('span.lbl', { text: 'Date (applies to all)' }), oDate]),
+      ...aAngleSel.map((oA) => h('div.rev-row', {}, [
+        h('img.rev-thumb', { src: oA.url }),
+        h('label.field', { style: 'flex:1;margin:0' }, [h('span.lbl', { text: 'Angle' }), oA.sel]),
+      ])),
+      oStatus, oBtn,
+    ]);
+  }, () => { aUrls.forEach((u) => URL.revokeObjectURL(u)); });
 }
 
 function openMedia(sUrl, sMime, sTitle) {
@@ -179,33 +216,56 @@ async function paintPhotos(tRoot) {
   let aPhotos = (await api.progressPhotos()).photos;
   let sView = 'gallery';
   let sCmpAngle = 'front';
+  let bSelect = false;          // two-photo compare selection mode
+  let aSel = [];                // selected photo ids (max 2)
 
-  const oDate = h('input', { type: 'date', value: todayISO() });
-  const oAngle = h('select', {}, ANGLES.map((a) => h('option', { value: a, text: cap(a) })));
   const oBody = h('div');
 
   async function refresh() { aPhotos = (await api.progressPhotos()).photos; paintBody(); }
   function paintBody() { if (sView === 'gallery') paintGallery(); else paintCompare(); }
 
+  function toggleSelect(iId) {
+    const i = aSel.indexOf(iId);
+    if (i >= 0) aSel.splice(i, 1);
+    else { aSel.push(iId); if (aSel.length > 2) aSel.shift(); } // keep the latest two
+    paintGallery();
+  }
+
   function thumb(oP) {
-    return h('div.photo-thumb', {}, [
-      h('img', { src: oP.url, loading: 'lazy', onclick: () => openMedia(oP.url, oP.mime, prettyDay(oP.takenOn) + ' · ' + cap(oP.angle)) }),
+    const bSel = aSel.includes(oP.id);
+    return h('div.photo-thumb' + (bSel ? '.sel' : ''), {}, [
+      h('img', { src: oP.url, loading: 'lazy',
+        onclick: () => (bSelect
+          ? toggleSelect(oP.id)
+          : openMedia(oP.url, oP.mime, prettyDay(oP.takenOn) + ' · ' + cap(oP.angle))) }),
       h('span.photo-tag', { text: oP.angle }),
-      h('button.photo-del', { type: 'button', text: '×',
-        onclick: () => confirmAction('Delete this photo?', async () => { await guard(api.deleteProgressPhoto(oP.id)); toast('Deleted'); refresh(); }) }),
+      bSelect
+        ? (bSel ? h('span.photo-check', { text: String(aSel.indexOf(oP.id) + 1) }) : null)
+        : h('button.photo-del', { type: 'button', text: '×',
+            onclick: () => confirmAction('Delete this photo?', async () => { await guard(api.deleteProgressPhoto(oP.id)); toast('Deleted'); aSel = []; refresh(); }) }),
     ]);
   }
 
   function paintGallery() {
-    if (!aPhotos.length) { mount(oBody, h('div.empty', {}, [h('p', { text: 'No progress photos yet. Add one above to start tracking.' })])); return; }
+    if (!aPhotos.length) { mount(oBody, h('div.empty', {}, [h('p', { text: 'No progress photos yet. Add some above to start tracking.' })])); return; }
+
+    const oBar = h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' }, [
+      h('button.btn.btn-ghost.btn-sm', { type: 'button', text: bSelect ? 'Cancel' : '⇄ Compare two',
+        onclick: () => { bSelect = !bSelect; aSel = []; paintGallery(); } }),
+      bSelect ? h('button.btn.btn-sm' + (aSel.length === 2 ? '.btn-accent' : ''), {
+        type: 'button', text: aSel.length === 2 ? 'Compare these two →' : 'Pick ' + (2 - aSel.length) + ' more',
+        disabled: aSel.length !== 2,
+        onclick: () => openCompareTwo(aPhotos.find((p) => p.id === aSel[0]), aPhotos.find((p) => p.id === aSel[1])) }) : null,
+    ]);
+
     const oByDate = {};
     for (const oP of aPhotos) (oByDate[oP.takenOn] = oByDate[oP.takenOn] || []).push(oP);
     const aDates = Object.keys(oByDate).sort().reverse();
-    mount(oBody, aDates.map((sD) => h('div', {}, [
+    mount(oBody, [oBar, ...aDates.map((sD) => h('div', {}, [
       h('div.meal-head', {}, [h('span.name', { text: prettyDay(sD) }),
         h('span.faint', { text: oByDate[sD].length + ' photo' + (oByDate[sD].length === 1 ? '' : 's') })]),
       h('div.photo-grid', {}, oByDate[sD].map(thumb)),
-    ])));
+    ]))]);
   }
 
   function paintCompare() {
@@ -225,18 +285,27 @@ async function paintPhotos(tRoot) {
 
   mount(tRoot, [
     h('div.card', {}, [
-      h('div.inline-fields', {}, [
-        h('label.field', { style: 'flex:1' }, [h('span.lbl', { text: 'Date' }), oDate]),
-        h('label.field', { style: 'flex:1' }, [h('span.lbl', { text: 'Angle' }), oAngle]),
-      ]),
-      h('button.btn.btn-accent.btn-block', { type: 'button', text: '+ Add photo',
-        onclick: () => pickImage(oDate.value || todayISO(), oAngle.value, refresh) }),
+      h('button.btn.btn-accent.btn-block', { type: 'button', text: '+ Add photos',
+        onclick: () => pickImages(todayISO(), () => { aSel = []; refresh(); }) }),
+      h('p.faint', { style: 'font-size:12px;margin:8px 0 0', text: 'Pick several at once — you’ll set the angle for each before uploading.' }),
     ]),
     h('div.seg', { style: 'margin-bottom:14px' }, [
-      segBtn('Gallery', sView === 'gallery', () => { sView = 'gallery'; paintBody(); }),
-      segBtn('Compare', sView === 'compare', () => { sView = 'compare'; paintBody(); }),
+      segBtn('Gallery', sView === 'gallery', () => { sView = 'gallery'; bSelect = false; aSel = []; paintBody(); }),
+      segBtn('By angle', sView === 'compare', () => { sView = 'compare'; paintBody(); }),
     ]),
     oBody,
   ]);
   paintBody();
+}
+
+// Focused side-by-side comparison of exactly two photos.
+function openCompareTwo(oA, oB) {
+  if (!oA || !oB) return;
+  openSheet('Compare', (tBody) => {
+    const col = (oP) => h('div', {}, [
+      h('img', { src: oP.url, style: 'width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;display:block' }),
+      h('div.cmp-date', { text: prettyDay(oP.takenOn) + ' · ' + cap(oP.angle) }),
+    ]);
+    mount(tBody, h('div.cmp-two', {}, [col(oA), col(oB)]));
+  });
 }

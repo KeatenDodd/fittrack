@@ -157,10 +157,18 @@ input, select, textarea {
   width: 100%; background: var(--surface); border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm); padding: 10px 12px;
 }
+/* keep single-line controls the same height so a date input lines up with a
+   select / text field beside it (their native heights otherwise differ) */
+input:not([type="checkbox"]):not([type="radio"]), select {
+  min-height: 44px; box-sizing: border-box;
+}
 input.num, .num input { font-family: var(--mono); }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .inline-fields { display: flex; gap: 10px; }
-.inline-fields > * { flex: 1; }
+/* min-width:0 lets flex children shrink below the control's intrinsic width,
+   so date/select fields share the row evenly instead of overflowing/crowding */
+.inline-fields > * { flex: 1; min-width: 0; }
+.inline-fields input, .inline-fields select, .inline-fields textarea { min-width: 0; }
 
 /* ---- workout set table ---- */
 .set-table { width: 100%; border-collapse: collapse; }
@@ -351,6 +359,16 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .cmp-item { flex: 0 0 auto; width: 46%; max-width: 200px; }
 .cmp-item img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; cursor: pointer; display: block; background: var(--line); }
 .cmp-date { text-align: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
+/* two-photo focused compare */
+.cmp-two { display: flex; gap: 10px; }
+.cmp-two > div { flex: 1; min-width: 0; }
+/* selection state for compare-two */
+.photo-thumb.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+.photo-check { position: absolute; top: 4px; left: 4px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+/* multi-upload review rows */
+.rev-row { display: flex; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.rev-thumb { width: 56px; height: 72px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; background: var(--line); }
 
 /* ---- exercise set clips ---- */
 .clip-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
