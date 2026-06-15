@@ -3,6 +3,9 @@ const express = require('express');
 const oDb = require('../db');
 const oAuth = require('../auth');
 const { wrap, httpError } = require('../util');
+const { saveUpload, removeUpload } = require('../upload');
+
+const MAX_VIDEO = 250 * 1024 * 1024; // 250 MB per set clip
 
 const oRouter = express.Router();
 oRouter.use(oAuth.requireAuth);
@@ -52,6 +55,11 @@ async function loadSession(tSessionId) {
        FROM exercise_sets WHERE session_exercise_id = $1 ORDER BY set_number ASC, id ASC`,
       [oExercise.id]
     );
+    const aMedia = await oDb.many(
+      'SELECT id, file_path, mime FROM exercise_media WHERE session_exercise_id = $1 ORDER BY id ASC',
+      [oExercise.id]
+    );
+    oExercise.media = aMedia.map((m) => ({ id: m.id, mime: m.mime, url: '/uploads/' + m.file_path }));
   }
   return { ...oSession, exercises: oExercises };
 }
@@ -197,6 +205,33 @@ oRouter.put('/exercises/:seId', wrap(async (tReq, tRes) => {
     [sNotes || null, tReq.params.seId]
   );
   tRes.json({ sessionExercise: oRow });
+}));
+
+// POST /api/sessions/exercises/:seId/media  -> attach a set video (raw body)
+oRouter.post('/exercises/:seId/media', wrap(async (tReq, tRes) => {
+  if (!(await ownSessionExercise(tReq.params.seId, tReq.iUserId))) throw httpError(404, 'Not found');
+  const oSaved = await saveUpload(tReq, 'exercise', ['video/', 'image/'], MAX_VIDEO);
+  const oRow = await oDb.one(
+    `INSERT INTO exercise_media (session_exercise_id, file_path, mime)
+     VALUES ($1, $2, $3) RETURNING id, file_path, mime`,
+    [tReq.params.seId, oSaved.relPath, oSaved.mime]
+  );
+  tRes.status(201).json({ media: { id: oRow.id, mime: oRow.mime, url: '/uploads/' + oRow.file_path } });
+}));
+
+// DELETE /api/sessions/media/:mediaId
+oRouter.delete('/media/:mediaId', wrap(async (tReq, tRes) => {
+  const oRow = await oDb.one(
+    `SELECT em.id, em.file_path FROM exercise_media em
+     JOIN session_exercises se ON se.id = em.session_exercise_id
+     JOIN workout_sessions s ON s.id = se.session_id
+     WHERE em.id = $1 AND s.user_id = $2`,
+    [tReq.params.mediaId, tReq.iUserId]
+  );
+  if (!oRow) throw httpError(404, 'Not found');
+  await oDb.query('DELETE FROM exercise_media WHERE id = $1', [oRow.id]);
+  removeUpload(oRow.file_path);
+  tRes.json({ ok: true });
 }));
 
 // DELETE /api/sessions/exercises/:seId

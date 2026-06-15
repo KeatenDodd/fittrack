@@ -1,7 +1,7 @@
 'use strict';
 import { api } from '../api.js';
 import { oStore } from '../store.js';
-import { h, mount, num, clock, toast, confirmAction, guard } from '../ui.js';
+import { h, mount, num, clock, toast, confirmAction, guard, openSheet } from '../ui.js';
 import { pickExercise } from './_pickers.js';
 
 let oTick = null;          // 1s interval (elapsed + rest)
@@ -242,6 +242,23 @@ function exerciseCard(oEx, tCtx) {
   oNote.addEventListener('blur', saveNote);
   oNote.addEventListener('keydown', (tEvent) => { if (tEvent.key === 'Enter') oNote.blur(); });
 
+  // Set videos — film a lift and attach it to this exercise.
+  function pickVideo() {
+    const oInput = h('input', { type: 'file', accept: 'video/*', style: 'display:none' });
+    oInput.addEventListener('change', async () => {
+      const oFile = oInput.files && oInput.files[0];
+      if (!oFile) return;
+      toast('Uploading video…');
+      try { await api.addExerciseMedia(oEx.id, oFile); toast('Video added'); tCtx.reload(); }
+      catch (tErr) { toast(tErr.message || 'Upload failed'); }
+    });
+    oInput.click();
+  }
+  const oMediaRow = h('div.clip-row', {}, [
+    ...(oEx.media || []).map((oM) => clipTile(oM, oEx.exercise_name, tCtx.reload)),
+    h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '🎥 Add video', onclick: pickVideo }),
+  ]);
+
   return h('div.card', {}, [
     h('div', { style: 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px' }, [
       h('div', {}, [h('strong', { text: oEx.exercise_name }),
@@ -262,5 +279,22 @@ function exerciseCard(oEx, tCtx) {
       h('button.btn.btn-sm', { type: 'button', text: 'Add set', onclick: addSet, style: 'flex:0 0 auto' }),
     ]),
     h('div', { style: 'margin-top:8px' }, [oNote]),
+    oMediaRow,
   ]);
+}
+
+// A small play tile for an attached clip (tap to view, × to delete).
+function clipTile(oM, sExName, tReload) {
+  return h('div.clip', { onclick: () => openClip(oM, sExName) }, [
+    h('span.clip-play', { text: '▶' }),
+    h('button.clip-del', { type: 'button', text: '×',
+      onclick: (tEvent) => { tEvent.stopPropagation();
+        confirmAction('Delete this clip?', async () => { await guard(api.deleteExerciseMedia(oM.id)); tReload(); }); } }),
+  ]);
+}
+
+function openClip(oM, sTitle) {
+  openSheet(sTitle || 'Clip', (tBody) => {
+    mount(tBody, h('video', { src: oM.url, controls: true, playsinline: true, style: 'width:100%;border-radius:8px' }));
+  });
 }

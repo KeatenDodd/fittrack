@@ -37,6 +37,7 @@ oApp.use('/api/import', require('./routes/import.routes'));
 oApp.use('/api/activity', require('./routes/activity.routes'));
 oApp.use('/api/programs', require('./routes/programs.routes'));
 oApp.use('/api/cycle', require('./routes/cycle.routes'));
+oApp.use('/api/photos', require('./routes/photos.routes'));
 
 oApp.get('/api/health', (tReq, tRes) => tRes.json({ ok: true }));
 
@@ -51,6 +52,12 @@ oApp.get(['/rootCA.pem', '/rootCA.crt'], (tReq, tRes) => {
   tRes.setHeader('Content-Disposition', 'attachment; filename="FitTrack-rootCA.crt"');
   return tRes.send(fs.readFileSync(sFile));
 });
+
+// Uploaded media (progress photos, set videos). Random UUID filenames, cached
+// long since they're immutable; express.static handles Range requests so video
+// seeking works. Served before the SPA fallback so /uploads/* isn't swallowed.
+const { sUploadsDir } = require('./upload');
+oApp.use('/uploads', express.static(sUploadsDir, { maxAge: '30d', immutable: true }));
 
 // Static SPA. no-cache = the browser must revalidate each load, so app updates
 // (bug fixes) always take effect on a normal refresh instead of serving stale JS.

@@ -134,6 +134,8 @@ async function renderDetail(tRoot, tCtx, tId) {
       h('div', { style: 'margin-bottom:8px' }, [h('strong', { text: oEx.exercise_name }),
         oEx.muscle_group ? h('span.faint', { text: '  ' + oEx.muscle_group }) : null]),
       oEx.notes ? h('p.ex-note', { text: '✎ ' + oEx.notes }) : null,
+      (oEx.media && oEx.media.length) ? h('div.clip-row', {}, oEx.media.map((oM) =>
+        h('div.clip', { onclick: () => openClip(oM, oEx.exercise_name) }, [h('span.clip-play', { text: '▶' })]))) : null,
       oEx.sets.length ? h('table.set-table', {}, [
         h('thead', {}, h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' })])),
         h('tbody', {}, oEx.sets.map((oSet) => h('tr', {}, [
@@ -154,4 +156,10 @@ async function renderDetail(tRoot, tCtx, tId) {
 function stat(sLabel, sValue, sUnit) {
   return h('div.stat', {}, [h('div.k', { text: sLabel }),
     h('div.v', {}, [h('span.num', { text: sValue }), sUnit ? h('small', { text: ' ' + sUnit }) : null])]);
+}
+
+function openClip(oM, sTitle) {
+  openSheet(sTitle || 'Clip', (tBody) => {
+    mount(tBody, h('video', { src: oM.url, controls: true, playsinline: true, style: 'width:100%;border-radius:8px' }));
+  });
 }

@@ -48,6 +48,19 @@ async function tryRefresh() {
   return oRefreshing;
 }
 
+// Raw binary upload (image/video). Streams the File as the request body with
+// its own content-type; metadata travels in the query string.
+async function rawUpload(tPath, tFile) {
+  const oHeaders = { 'Content-Type': tFile.type || 'application/octet-stream' };
+  const sToken = oStore.accessToken;
+  if (sToken) oHeaders.Authorization = 'Bearer ' + sToken;
+  const oResponse = await fetch('/api' + tPath, { method: 'POST', headers: oHeaders, body: tFile });
+  const sText = await oResponse.text();
+  const oData = sText ? JSON.parse(sText) : {};
+  if (!oResponse.ok) throw new Error(oData.error || ('Upload failed (' + oResponse.status + ')'));
+  return oData;
+}
+
 function get(tPath) { return rawFetch(tPath, { method: 'GET' }); }
 function post(tPath, tBody) { return rawFetch(tPath, { method: 'POST', body: JSON.stringify(tBody || {}) }); }
 function put(tPath, tBody) { return rawFetch(tPath, { method: 'PUT', body: JSON.stringify(tBody || {}) }); }
@@ -66,6 +79,12 @@ export const api = {
   cycle: () => get('/cycle'),
   saveCycleDay: (tDate, tBody) => put('/cycle/' + tDate, tBody),
   saveCyclePeriod: (tBody) => post('/cycle/range', tBody),
+
+  // progress photos
+  progressPhotos: () => get('/photos'),
+  uploadProgressPhoto: (tFile, tDate, tAngle) =>
+    rawUpload('/photos?date=' + encodeURIComponent(tDate) + '&angle=' + encodeURIComponent(tAngle), tFile),
+  deleteProgressPhoto: (tId) => del('/photos/' + tId),
 
   // exercises
   exercises: () => get('/exercises'),
@@ -90,6 +109,8 @@ export const api = {
   addSessionExercise: (tId, tExerciseId) => post('/sessions/' + tId + '/exercises', { exerciseId: tExerciseId }),
   removeSessionExercise: (tSeId) => del('/sessions/exercises/' + tSeId),
   setSessionExerciseNote: (tSeId, tNotes) => put('/sessions/exercises/' + tSeId, { notes: tNotes }),
+  addExerciseMedia: (tSeId, tFile) => rawUpload('/sessions/exercises/' + tSeId + '/media', tFile),
+  deleteExerciseMedia: (tMediaId) => del('/sessions/media/' + tMediaId),
   addSet: (tSeId, tBody) => post('/sessions/exercises/' + tSeId + '/sets', tBody),
   updateSet: (tSetId, tBody) => put('/sessions/sets/' + tSetId, tBody),
   deleteSet: (tSetId) => del('/sessions/sets/' + tSetId),
