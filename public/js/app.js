@@ -72,14 +72,23 @@ function renderNav(sActiveKey) {
   }
 }
 
+// Middle-earth line-art icons for the header's secondary links.
+const ICON_HISTORY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h10a2 2 0 0 1 2 2 2 2 0 0 1-2 2H8"/><path d="M6 4a2 2 0 0 0-2 2v11a2.5 2.5 0 0 0 2.5 2.5H15"/><path d="M8 11h6M8 14h4"/><path d="M20.5 12.5 14 19l-2.6.6.6-2.6 6.5-6.5a1.35 1.35 0 0 1 1.9 0 1.35 1.35 0 0 1 0 1.9z"/></svg>';
+const ICON_SETTINGS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.4"/><path d="M10 4.6V3M10 17v-1.6M4.6 10H3M17 10h-1.6M6.2 6.2 5 5M15 15l-1.2-1.2M13.8 6.2 15 5M5 15l1.2-1.2"/><circle cx="17.5" cy="17.5" r="1.7"/><path d="M17.5 14.6v-1M17.5 20.4v-1M14.6 17.5h-1M20.4 17.5h-1"/></svg>';
+const ICON_CYCLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>';
+
+function hdrIcon(sHref, sLabel, sSvg) {
+  return h('a.hdr-icon', { href: sHref, title: sLabel, 'aria-label': sLabel, html: sSvg });
+}
+
 function renderHeaderUser() {
   const oEl = document.getElementById('headerUser');
   const oUser = oStore.user;
   clear(oEl);
   if (!oUser) return;
-  if (oUser.sex === 'female') oEl.appendChild(h('a', { href: '#/cycle', text: 'Cycle' }));
-  oEl.appendChild(h('a', { href: '#/history', text: 'History' }));
-  oEl.appendChild(h('a', { href: '#/settings', text: 'Settings' }));
+  if (oUser.sex === 'female') oEl.appendChild(hdrIcon('#/cycle', 'Cycle', ICON_CYCLE));
+  oEl.appendChild(hdrIcon('#/history', 'History', ICON_HISTORY));
+  oEl.appendChild(hdrIcon('#/settings', 'Settings', ICON_SETTINGS));
   oEl.appendChild(h('button', { type: 'button', text: 'Switch Accounts', onclick: signOut }));
   oEl.appendChild(h('span.who', { text: oUser.displayName || oUser.username }));
 }
@@ -98,8 +107,10 @@ async function route() {
 
   const { sKey, aArgs } = currentRoute();
   const oRoute = oRoutes[sKey] || oRoutes.dashboard;
+  // A live workout / template editor belongs to the Program tab; other non-tab
+  // pages (History, Cycle, Settings, …) are header links and highlight no tab.
   renderNav(oRoutes[sKey] && oRoutes[sKey].nav ? sKey
-    : (['workout', 'templates', 'history', 'cycle'].includes(sKey) ? 'program' : sKey));
+    : (['workout', 'templates'].includes(sKey) ? 'program' : sKey));
 
   clear(oView);
   try {

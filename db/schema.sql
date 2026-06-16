@@ -90,6 +90,11 @@ CREATE TABLE programs (
   current_week      INTEGER     NOT NULL DEFAULT 1,
   current_day_index INTEGER     NOT NULL DEFAULT 0,
   active            BOOLEAN     NOT NULL DEFAULT true, -- false once completed
+  -- optional calendar schedule so the app knows rest days vs workout days
+  schedule_type     VARCHAR(10) NOT NULL DEFAULT 'none', -- none | interval | weekdays
+  schedule_weekdays VARCHAR(20),  -- comma list 0-6 (Sun=0) for 'weekdays'
+  schedule_interval INTEGER,      -- N for 'interval' (every N days)
+  schedule_anchor   TEXT,         -- 'YYYY-MM-DD' start anchor for 'interval'
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_programs_user ON programs(user_id);

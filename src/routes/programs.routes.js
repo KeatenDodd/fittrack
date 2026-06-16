@@ -17,6 +17,69 @@ oRouter.use(oAuth.requireAuth);
 
 function roundTo5(f) { return Math.max(0, Math.round(f / 5) * 5); }
 
+// --- local-date helpers for scheduling ---------------------------------------
+function pad(n) { return String(n).padStart(2, '0'); }
+function todayLocalIso() { const n = new Date(); return n.getFullYear() + '-' + pad(n.getMonth() + 1) + '-' + pad(n.getDate()); }
+function toLocalDate(s) { const a = s.split('-').map(Number); return new Date(a[0], a[1] - 1, a[2]); }
+function isoOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function addDays(s, n) { const d = toLocalDate(s); d.setDate(d.getDate() + n); return isoOf(d); }
+function diffDays(a, b) { return Math.round((toLocalDate(b) - toLocalDate(a)) / 86400000); }
+function weekdayOf(s) { return toLocalDate(s).getDay(); }
+
+// Is today a workout day, a rest day, or already done — given the schedule.
+async function scheduleStatus(oProgram) {
+  const sType = oProgram.schedule_type || 'none';
+  if (sType === 'none') return { type: 'none' };
+  const sToday = todayLocalIso();
+  const oLast = await oDb.one(
+    "SELECT date(started_at) AS d FROM workout_sessions WHERE program_id = $1 AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+    [oProgram.id]
+  );
+  const sLast = oLast ? oLast.d : null;
+  const bDoneToday = sLast === sToday;
+
+  let bWorkoutDay = false;
+  let sNext = null;
+  if (sType === 'interval') {
+    const iN = Math.max(1, oProgram.schedule_interval || 2);
+    const sAnchor = oProgram.schedule_anchor || sToday;
+    if (bDoneToday) {
+      sNext = addDays(sLast, iN);
+    } else {
+      const sRef = sLast ? addDays(sLast, iN) : sAnchor;
+      if (diffDays(sRef, sToday) >= 0) bWorkoutDay = true; // due or overdue
+      else sNext = sRef;
+    }
+  } else if (sType === 'weekdays') {
+    const aWd = String(oProgram.schedule_weekdays || '').split(',').map(Number).filter((n) => n >= 0 && n <= 6);
+    if (!bDoneToday && aWd.includes(weekdayOf(sToday))) {
+      bWorkoutDay = true;
+    } else {
+      for (let k = 1; k <= 7; k += 1) { const s = addDays(sToday, k); if (aWd.includes(weekdayOf(s))) { sNext = s; break; } }
+    }
+  }
+  let sStatus = 'rest';
+  if (bDoneToday) sStatus = 'done';
+  else if (bWorkoutDay) sStatus = 'workout';
+  return { type: sType, status: sStatus, doneToday: bDoneToday, nextDate: sNext };
+}
+
+// Normalize a schedule from a request body into stored fields.
+function normSchedule(oSched) {
+  const oS = oSched || {};
+  const sType = ['interval', 'weekdays'].includes(oS.type) ? oS.type : 'none';
+  if (sType === 'interval') {
+    return { type: 'interval', interval: Math.min(Math.max(parseInt(oS.interval, 10) || 2, 1), 14),
+      weekdays: null, anchor: todayLocalIso() };
+  }
+  if (sType === 'weekdays') {
+    const aWd = (Array.isArray(oS.weekdays) ? oS.weekdays : [])
+      .map((n) => parseInt(n, 10)).filter((n) => n >= 0 && n <= 6);
+    return { type: 'weekdays', interval: null, weekdays: [...new Set(aWd)].sort().join(','), anchor: null };
+  }
+  return { type: 'none', interval: null, weekdays: null, anchor: null };
+}
+
 async function ownProgram(tId, tUserId) {
   return oDb.one('SELECT * FROM programs WHERE id = $1 AND user_id = $2', [tId, tUserId]);
 }
@@ -43,6 +106,7 @@ async function loadProgram(tProgramId) {
     days: aDays,
     is_deload_week: bDeloadWeek,
     next_day: aDays[oProgram.current_day_index] || aDays[0] || null,
+    today: await scheduleStatus(oProgram),
   };
 }
 
@@ -75,6 +139,19 @@ oRouter.get('/:id', wrap(async (tReq, tRes) => {
   tRes.json({ program: await loadProgram(tReq.params.id) });
 }));
 
+// PUT /api/programs/:id/schedule  -> set the calendar schedule
+// body: { type: 'none'|'interval'|'weekdays', interval, weekdays: [0-6] }
+oRouter.put('/:id/schedule', wrap(async (tReq, tRes) => {
+  if (!(await ownProgram(tReq.params.id, tReq.iUserId))) throw httpError(404, 'Program not found');
+  const oS = normSchedule(tReq.body);
+  await oDb.query(
+    `UPDATE programs SET schedule_type = $1, schedule_weekdays = $2,
+       schedule_interval = $3, schedule_anchor = $4 WHERE id = $5`,
+    [oS.type, oS.weekdays, oS.interval, oS.anchor, tReq.params.id]
+  );
+  tRes.json({ program: await loadProgram(tReq.params.id) });
+}));
+
 // POST /api/programs  -> create a program (and make it the active one)
 // body: { name, weeks, deloadEnabled, days: [ { name, exercises: [
 //   { exerciseId, sets, repLow, repHigh, weight, increment, restSeconds } ] } ] }
@@ -86,10 +163,14 @@ oRouter.post('/', wrap(async (tReq, tRes) => {
   const iWeeks = Math.min(Math.max(parseInt(tReq.body.weeks || '5', 10) || 5, 2), 12);
   const bDeload = tReq.body.deloadEnabled !== false;
 
+  const oSched = normSchedule(tReq.body.schedule);
   await oDb.query('UPDATE programs SET active = 0 WHERE user_id = $1', [tReq.iUserId]);
   const oProgram = await oDb.one(
-    `INSERT INTO programs (user_id, name, weeks, deload_enabled) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [tReq.iUserId, sName, iWeeks, bDeload]
+    `INSERT INTO programs (user_id, name, weeks, deload_enabled,
+       schedule_type, schedule_weekdays, schedule_interval, schedule_anchor)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [tReq.iUserId, sName, iWeeks, bDeload,
+     oSched.type, oSched.weekdays, oSched.interval, oSched.anchor]
   );
 
   for (let d = 0; d < aDays.length; d += 1) {

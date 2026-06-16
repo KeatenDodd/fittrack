@@ -15,6 +15,26 @@ oSqlite.exec('PRAGMA journal_mode = WAL');
 oSqlite.exec('PRAGMA foreign_keys = ON');
 
 ensureSchema();
+ensureColumns();
+
+// Add columns introduced after a database was first created (SQLite has no
+// "ADD COLUMN IF NOT EXISTS", so we check PRAGMA table_info first). Idempotent.
+function ensureColumns() {
+  const aAdds = [
+    ['programs', 'schedule_type', "VARCHAR(10) NOT NULL DEFAULT 'none'"],
+    ['programs', 'schedule_weekdays', 'VARCHAR(20)'],
+    ['programs', 'schedule_interval', 'INTEGER'],
+    ['programs', 'schedule_anchor', 'TEXT'],
+  ];
+  for (const [sTable, sCol, sDef] of aAdds) {
+    try {
+      const aCols = oSqlite.prepare('PRAGMA table_info(' + sTable + ')').all();
+      if (aCols.length && !aCols.some((c) => c.name === sCol)) {
+        oSqlite.exec('ALTER TABLE ' + sTable + ' ADD COLUMN ' + sCol + ' ' + sDef);
+      }
+    } catch (tErr) { /* table may not exist yet on a brand-new db */ }
+  }
+}
 
 // --- schema bootstrap ---------------------------------------------------------
 function translate(sSql) {

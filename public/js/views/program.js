@@ -1,8 +1,90 @@
 'use strict';
 import { api } from '../api.js';
 import { oStore } from '../store.js';
-import { h, mount, num, toast, guard, confirmAction } from '../ui.js';
+import { h, mount, num, toast, guard, confirmAction, openSheet } from '../ui.js';
 import { pickExercise } from './_pickers.js';
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function prettyDate(sIso) {
+  return new Date(sIso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+// Reusable schedule control (used in the builder and the edit sheet).
+// getValue() -> { type:'none'|'interval'|'weekdays', interval?, weekdays? }
+function scheduleControl(oInitial) {
+  const oInit = oInitial || {};
+  const oType = h('select', {}, [
+    ['none', 'No fixed schedule (start whenever)'],
+    ['eod', 'Every other day'],
+    ['interval', 'Every N days'],
+    ['weekdays', 'Specific days of the week'],
+  ].map(([v, t]) => h('option', { value: v, text: t })));
+  let sSel = 'none';
+  if (oInit.type === 'interval') sSel = oInit.interval === 2 ? 'eod' : 'interval';
+  else if (oInit.type === 'weekdays') sSel = 'weekdays';
+  oType.value = sSel;
+
+  const oN = h('input.num', { type: 'number', inputmode: 'numeric', min: '1', max: '14',
+    value: oInit.interval || 2, style: 'width:90px' });
+  const oNWrap = h('label.field', { style: 'margin:0' }, [h('span.lbl', { text: 'Every how many days' }), oN]);
+
+  const oSelDays = new Set(oInit.weekdays || []);
+  const oDaysWrap = h('div.chips', {});
+  function paintDays() {
+    mount(oDaysWrap, DOW.map((d, i) => h('button.chip' + (oSelDays.has(i) ? '.on' : ''), {
+      type: 'button', text: d, onclick: () => { if (oSelDays.has(i)) oSelDays.delete(i); else oSelDays.add(i); paintDays(); } })));
+  }
+  paintDays();
+
+  const oExtra = h('div', { style: 'margin-top:8px' });
+  function paintExtra() {
+    if (oType.value === 'interval') mount(oExtra, oNWrap);
+    else if (oType.value === 'weekdays') mount(oExtra, [h('span.lbl', { style: 'display:block;margin-bottom:6px', text: 'Train on these days' }), oDaysWrap]);
+    else mount(oExtra, null);
+  }
+  oType.addEventListener('change', paintExtra);
+  paintExtra();
+
+  const oEl = h('div', {}, [h('label.field', { style: 'margin-bottom:0' }, [h('span.lbl', { text: 'Schedule' }), oType]), oExtra]);
+  function getValue() {
+    if (oType.value === 'eod') return { type: 'interval', interval: 2 };
+    if (oType.value === 'interval') return { type: 'interval', interval: parseInt(oN.value, 10) || 2 };
+    if (oType.value === 'weekdays') return { type: 'weekdays', weekdays: [...oSelDays] };
+    return { type: 'none' };
+  }
+  return { el: oEl, getValue };
+}
+
+function openScheduleSheet(oProgram, tReload) {
+  openSheet('Workout schedule', (tBody, tClose) => {
+    const oCtrl = scheduleControl({
+      type: oProgram.schedule_type,
+      interval: oProgram.schedule_interval,
+      weekdays: oProgram.schedule_weekdays ? oProgram.schedule_weekdays.split(',').map(Number) : [],
+    });
+    mount(tBody, [
+      h('p.muted', { style: 'margin-top:0', text: 'FitTrack will tell you whether today is a rest day or a workout day.' }),
+      oCtrl.el,
+      h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Save schedule', style: 'margin-top:14px',
+        onclick: async () => { await guard(api.setProgramSchedule(oProgram.id, oCtrl.getValue())); toast('Schedule saved'); tClose(); tReload(); } }),
+    ]);
+  });
+}
+
+// Today's status banner from the schedule (rest / workout / done).
+function scheduleBanner(oProgram) {
+  const oT = oProgram.today;
+  if (!oT || oT.type === 'none') return null;
+  if (oT.status === 'workout') {
+    return h('div.sched-banner.work', {}, [h('strong', { text: 'Today is a workout day' })]);
+  }
+  if (oT.status === 'done') {
+    return h('div.sched-banner.rest', {}, [h('strong', { text: 'Done for today' }),
+      oT.nextDate ? h('div.faint', { style: 'margin-top:2px', text: 'Next workout: ' + prettyDate(oT.nextDate) }) : null]);
+  }
+  return h('div.sched-banner.rest', {}, [h('strong', { text: 'Today is a rest day' }),
+    oT.nextDate ? h('div.faint', { style: 'margin-top:2px', text: 'Next workout: ' + prettyDate(oT.nextDate) }) : null]);
+}
 
 // Deload preview, mirrors targetsFor() on the server so the overview shows the
 // same numbers the next workout will be generated with.
@@ -143,6 +225,7 @@ function programSection(tCtx, oProgram, tStartNext, tReload) {
 
   return h('div', {}, [
     h('h2', {}, ['Program', h('span.faint', { style: 'font-weight:400;font-size:13px', text: '  ' + oProgram.name })]),
+    scheduleBanner(oProgram),
     h('div.stat-grid', {}, [
       stat('Week', oProgram.current_week + ' / ' + oProgram.weeks, ''),
       stat('Phase', bDeload ? 'Deload' : 'Build', ''),
@@ -152,6 +235,7 @@ function programSection(tCtx, oProgram, tStartNext, tReload) {
     h('h2', { style: 'margin-top:18px', text: 'Working weights' }),
     oWeights,
     h('div.btn-row', { style: 'margin-top:16px' }, [
+      h('button.btn.btn-ghost', { type: 'button', text: 'Schedule', onclick: () => openScheduleSheet(oProgram, tReload) }),
       h('button.btn.btn-ghost', { type: 'button', text: 'Restart block',
         onclick: () => confirmAction('Restart at Week 1, Day 1? Your progressed weights are kept.', async () => {
           await guard(api.restartProgram(oProgram.id)); toast('Block restarted'); tReload();
@@ -193,6 +277,8 @@ function renderBuilder(tRoot, tCtx) {
   const oScheme = h('select', {}, SCHEMES.map((s) =>
     h('option', { value: s.key, text: s.label, selected: s.key === oDraft.defaultScheme })));
   oScheme.addEventListener('change', () => { oDraft.defaultScheme = oScheme.value; });
+
+  const oSchedCtrl = scheduleControl(null);
 
   const oDaysRoot = h('div');
 
@@ -279,6 +365,7 @@ function renderBuilder(tRoot, tCtx) {
       name: oName.value.trim(),
       weeks: parseInt(oWeeks.value, 10) || 5,
       deloadEnabled: oDeload.checked,
+      schedule: oSchedCtrl.getValue(),
       days: aDays,
     }));
     toast('Program created');
@@ -295,8 +382,9 @@ function renderBuilder(tRoot, tCtx) {
         h('label', { style: 'display:flex;gap:8px;align-items:center;padding-bottom:10px' },
           [oDeload, h('span.faint', { text: 'Auto-deload last week' })]),
       ]),
-      h('label.field', { style: 'margin-bottom:0' }, [
+      h('label.field', {}, [
         h('span.lbl', { text: 'Default scheme for new exercises' }), oScheme]),
+      oSchedCtrl.el,
     ]),
     h('h2', { text: 'Training days' }),
     oDaysRoot,

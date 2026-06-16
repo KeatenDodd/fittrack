@@ -124,6 +124,7 @@ export const api = {
   program: (tId) => get('/programs/' + tId),
   createProgram: (tBody) => post('/programs', tBody),
   startNextProgramDay: (tId) => post('/programs/' + tId + '/start-next', {}),
+  setProgramSchedule: (tId, tBody) => put('/programs/' + tId + '/schedule', tBody),
   restartProgram: (tId) => post('/programs/' + tId + '/restart', {}),
   deleteProgram: (tId) => del('/programs/' + tId),
 
