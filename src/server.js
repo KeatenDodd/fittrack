@@ -51,6 +51,17 @@ oApp.use('/api/photos', require('./routes/photos.routes'));
 
 oApp.get('/api/health', (tReq, tRes) => tRes.json({ ok: true }));
 
+// Version + auto-update status (shown in Settings).
+oApp.get('/api/version', (tReq, tRes) => {
+  const oStatus = Object.assign({}, require('./updater').getStatus());
+  if (!oStatus.version) {
+    // dev run: read the version from package.json (dynamic path so it isn't
+    // bundled into the exe, where FITTRACK_VERSION is set at build time instead)
+    try { oStatus.version = require(path.join(__dirname, '..', 'package.json')).version; } catch (tErr) { /* n/a */ }
+  }
+  tRes.json(oStatus);
+});
+
 // Serve the mkcert root CA so a phone can install + trust it (needed for native
 // apps like the watch's Health exporter, which won't accept an untrusted cert).
 const sCaRoot = process.env.CAROOT

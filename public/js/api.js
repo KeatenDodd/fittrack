@@ -74,6 +74,7 @@ export const api = {
   logout: () => post('/auth/logout', { refreshToken: oStore.refreshToken }),
   me: () => get('/auth/me'),
   updateProfile: (tBody) => put('/auth/me', tBody),
+  appVersion: () => get('/version'),
 
   // menstrual cycle
   cycle: () => get('/cycle'),

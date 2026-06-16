@@ -7,6 +7,7 @@ export async function render(tRoot, tArgs, tCtx) {
   mount(tRoot, h('div.empty', { text: 'Loading…' }));
   let sKey = (await api.activityKey()).key;
   const oUser = oStore.user || {};
+  const oVer = await api.appVersion().catch(() => null);
 
   // ---- profile (name + sex; sex unlocks female-health/cycle tracking) ----
   const oName = h('input', { type: 'text', value: oUser.displayName || '' });
@@ -106,7 +107,28 @@ export async function render(tRoot, tArgs, tCtx) {
         'Bring in workout history from the Strong app (Profile → Settings → Export Data → CSV).' }),
       h('a.btn.btn-block', { href: '#/import', text: 'Open Strong import', style: 'text-align:center' }),
     ]),
+
+    h('h2', { style: 'margin-top:20px', text: 'About' }),
+    h('div.card', {}, [
+      h('div.kv', {}, [h('span.lbl', { text: 'FitTrack version' }),
+        h('span.num', { text: oVer && oVer.version ? oVer.version : '—' })]),
+      versionNote(oVer),
+    ]),
   ]);
+}
+
+// Update status line for the About card.
+function versionNote(oVer) {
+  if (!oVer) return null;
+  if (oVer.staged) {
+    return h('div.callout', { style: 'margin-top:10px' }, [
+      h('strong', { text: 'Update ready' + (oVer.latest ? ' (v' + oVer.latest + ')' : '') }),
+      h('p', { style: 'margin:6px 0 0', text: 'Close FitTrack and reopen it to finish updating.' }),
+    ]);
+  }
+  if (oVer.sea && oVer.repoSet) return h('p.faint', { style: 'margin:8px 0 0', text: "You're up to date." });
+  if (oVer.sea && !oVer.repoSet) return h('p.faint', { style: 'margin:8px 0 0', text: 'Auto-update is not configured.' });
+  return h('p.faint', { style: 'margin:8px 0 0', text: 'Running the development server.' });
 }
 
 function details(sTitle, aSteps) {

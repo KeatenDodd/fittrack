@@ -17,6 +17,26 @@ const oConfig = require('./config');
 const sVersion = process.env.FITTRACK_VERSION || '';
 const sRepo = process.env.FITTRACK_REPO || ''; // "owner/repo"
 
+// Live status the app can show in Settings.
+const oStatus = {
+  version: sVersion,
+  sea: oConfig.bSea,
+  repoSet: !!sRepo && !sRepo.includes('YOUR_'),
+  latest: null,
+  staged: false, // a newer exe is downloaded and applies on next launch
+};
+// Reflect a previously-downloaded update even before the async check runs.
+try {
+  const sDir = path.join(oConfig.sDataDir, 'update');
+  const sMk = path.join(sDir, 'staged-version.txt');
+  if (fs.existsSync(path.join(sDir, 'FitTrack.exe')) && fs.existsSync(sMk)) {
+    oStatus.staged = true;
+    oStatus.latest = fs.readFileSync(sMk, 'utf8').trim();
+  }
+} catch (tErr) { /* ignore */ }
+
+function getStatus() { return oStatus; }
+
 function cmpVer(sA, sB) {
   const aA = String(sA).split('.').map((n) => parseInt(n, 10) || 0);
   const aB = String(sB).split('.').map((n) => parseInt(n, 10) || 0);
@@ -45,9 +65,11 @@ async function checkForUpdate() {
   } catch (tErr) { return; }
 
   const sLatest = String(oRelease.tag_name || '').replace(/^v/i, '');
+  oStatus.latest = sLatest || null;
   if (!sLatest || cmpVer(sLatest, sVersion) <= 0) {
     // up to date — clear any stale staged download
     try { fs.rmSync(sUpdateDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+    oStatus.staged = false;
     return;
   }
 
@@ -73,6 +95,7 @@ async function checkForUpdate() {
     }
   }
 
+  oStatus.staged = true;
   armSwap(sStaged, process.execPath, process.pid);
 }
 
@@ -93,4 +116,4 @@ function armSwap(sStaged, sExe, iPid) {
   } catch (tErr) { /* update will just retry next launch */ }
 }
 
-module.exports = { checkForUpdate, version: sVersion, repo: sRepo };
+module.exports = { checkForUpdate, getStatus, version: sVersion, repo: sRepo };
