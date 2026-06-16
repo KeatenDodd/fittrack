@@ -1,8 +1,9 @@
 'use strict';
 import { api } from '../api.js';
 import { oStore } from '../store.js';
-import { h, mount, num, clock, toast, confirmAction, guard, openSheet } from '../ui.js';
+import { h, mount, num, clock, toast, confirmAction, guard, openSheet, restGap } from '../ui.js';
 import { pickExercise } from './_pickers.js';
+import { unlockAudio, playBell } from '../sound.js';
 
 let oTick = null;          // 1s interval (elapsed + rest)
 let oRest = null;          // { iLeft, iTotal } or null
@@ -68,7 +69,7 @@ function renderActive(tRoot, tCtx, oSession) {
     paintElapsed();
     if (oRest) {
       oRest.iLeft -= 1;
-      if (oRest.iLeft <= 0) { oRest = null; toast('Rest done'); }
+      if (oRest.iLeft <= 0) { oRest = null; toast('Rest done'); playBell(); }
       paintRest();
     }
   }, 1000);
@@ -189,6 +190,7 @@ function exerciseCard(oEx, tCtx) {
   paintTypeChip();
 
   async function addSet() {
+    unlockAudio(); // this tap lets the rest-done sound play later (iOS)
     const oBody = {
       weight: oWeight.value === '' ? null : Number(oWeight.value),
       reps: oReps.value === '' ? null : Number(oReps.value),
@@ -210,10 +212,11 @@ function exerciseCard(oEx, tCtx) {
     tCtx.reload();
   }
 
-  const oRows = oEx.sets.map((oSet) => h('tr', {}, [
+  const oRows = oEx.sets.map((oSet, i) => h('tr', {}, [
     setMarkerCell(oSet, () => cycleType(oSet)),
     h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
     h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
+    h('td.num.rest', { text: (i > 0 && restGap(oEx.sets[i - 1], oSet)) || '–' }),
     h('td', { style: 'text-align:right' }, [
       h('button.icon-btn', { type: 'button', text: '×', title: 'Delete set',
         onclick: async () => { await guard(api.deleteSet(oSet.id)); tCtx.reload(); } }),
@@ -267,7 +270,7 @@ function exerciseCard(oEx, tCtx) {
     ]),
     oTargetLine,
     oEx.sets.length ? h('table.set-table', {}, [
-      h('thead', {}, h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' }), h('th', {})])),
+      h('thead', {}, h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' }), h('th', { text: 'Rest' }), h('th', {})])),
       h('tbody', {}, oRows),
     ]) : null,
     h('div.inline-fields', { style: 'margin-top:10px' }, [

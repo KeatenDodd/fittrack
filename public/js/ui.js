@@ -75,6 +75,15 @@ export function clock(tSeconds) {
   return iMin + ':' + String(iSec).padStart(2, '0');
 }
 
+// Measured rest between two consecutive sets (from when each was logged).
+// Returns "m:ss" or null when it's not a plausible rest gap.
+export function restGap(oPrev, oCur) {
+  if (!oPrev || !oPrev.performed_at || !oCur || !oCur.performed_at) return null;
+  const iSec = Math.round((new Date(oCur.performed_at) - new Date(oPrev.performed_at)) / 1000);
+  if (iSec < 1 || iSec > 1800) return null; // ignore <1s or >30min (not a rest)
+  return clock(iSec);
+}
+
 // ---- toast -------------------------------------------------------------------
 let oToastTimer = null;
 export function toast(tMessage) {

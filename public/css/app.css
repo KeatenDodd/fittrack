@@ -179,6 +179,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .set-table td.warm { color: var(--warn); }
 .set-table td.myo { color: var(--accent); }
 .set-table td.drop { color: var(--danger); }
+.set-table td.rest { color: var(--faint); font-size: 12.5px; }
 
 /* set-type chip in the add-set row (tap to cycle normal/warmup/myo/drop) */
 .type-chip { width: 38px; padding: 9px 0; text-align: center; border: 0; cursor: pointer;

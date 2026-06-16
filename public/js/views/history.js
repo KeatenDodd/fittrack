@@ -1,6 +1,7 @@
 'use strict';
 import { api } from '../api.js';
-import { h, mount, num, fmtDay, clock, confirmAction, guard, openSheet } from '../ui.js';
+import { h, mount, num, fmtDay, clock, confirmAction, guard, openSheet, restGap } from '../ui.js';
+import { pickExercise } from './_pickers.js';
 
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -108,49 +109,144 @@ function openDay(aSessions, tCtx) {
   });
 }
 
+const HIST_MARK = { warmup: { t: 'W', c: '.warm' }, myo: { t: 'M', c: '.myo' }, drop: { t: 'D', c: '.drop' } };
+const SET_CYCLE = ['normal', 'warmup', 'myo', 'drop'];
+function typeOf(oSet) { return oSet.set_type || (oSet.is_warmup ? 'warmup' : 'normal'); }
+
 async function renderDetail(tRoot, tCtx, tId) {
-  mount(tRoot, h('div.empty', { text: 'Loading…' }));
-  const oSession = (await api.session(tId)).session;
+  let bEdit = false;
+  let oSession = null;
 
-  let iVolume = 0, iSets = 0;
-  for (const oEx of oSession.exercises)
-    for (const oSet of oEx.sets) { if (!oSet.is_warmup && oSet.weight && oSet.reps) iVolume += oSet.weight * oSet.reps; iSets += 1; }
+  async function load() { oSession = (await api.session(tId)).session; paint(); }
 
-  const iDuration = oSession.ended_at
-    ? Math.floor((new Date(oSession.ended_at) - new Date(oSession.started_at)) / 1000) : null;
+  function paint() {
+    let iVolume = 0; let iSets = 0;
+    for (const oEx of oSession.exercises) {
+      for (const oSet of oEx.sets) { if (!oSet.is_warmup && oSet.weight && oSet.reps) iVolume += oSet.weight * oSet.reps; iSets += 1; }
+    }
+    const iDuration = oSession.ended_at
+      ? Math.floor((new Date(oSession.ended_at) - new Date(oSession.started_at)) / 1000) : null;
 
-  mount(tRoot, [
-    h('div.page-head', {}, [
-      h('a.eyebrow', { href: '#/history', text: '← History' }),
-      h('h1', { text: oSession.name || 'Workout' }),
-      h('p', { text: fmtDay(oSession.started_at) }),
-    ]),
-    h('div.stat-grid', {}, [
-      stat('Volume', num(iVolume), 'lb'),
-      stat('Sets', String(iSets), ''),
-      stat('Duration', iDuration != null ? clock(iDuration) : '–', ''),
-    ]),
-    ...oSession.exercises.map((oEx) => h('div.card', {}, [
-      h('div', { style: 'margin-bottom:8px' }, [h('strong', { text: oEx.exercise_name }),
-        oEx.muscle_group ? h('span.faint', { text: '  ' + oEx.muscle_group }) : null]),
-      oEx.notes ? h('p.ex-note', { text: '✎ ' + oEx.notes }) : null,
-      (oEx.media && oEx.media.length) ? h('div.clip-row', {}, oEx.media.map((oM) =>
-        h('div.clip', { onclick: () => openClip(oM, oEx.exercise_name) }, [h('span.clip-play', { text: '▶' })]))) : null,
-      oEx.sets.length ? h('table.set-table', {}, [
-        h('thead', {}, h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' })])),
-        h('tbody', {}, oEx.sets.map((oSet) => h('tr', {}, [
+    mount(tRoot, [
+      h('div.page-head', { style: 'display:flex;justify-content:space-between;align-items:flex-start' }, [
+        h('div', {}, [
+          h('a.eyebrow', { href: '#/history', text: '← History' }),
+          h('h1', { text: oSession.name || 'Workout' }),
+          h('p', { text: fmtDay(oSession.started_at) }),
+        ]),
+        h('button.btn' + (bEdit ? '.btn-accent' : '.btn-ghost') + '.btn-sm', { type: 'button',
+          text: bEdit ? 'Done' : 'Edit', onclick: () => { bEdit = !bEdit; paint(); } }),
+      ]),
+      h('div.stat-grid', {}, [
+        stat('Volume', num(iVolume), 'lb'),
+        stat('Sets', String(iSets), ''),
+        stat('Duration', iDuration != null ? clock(iDuration) : '–', ''),
+      ]),
+      ...oSession.exercises.map(exCard),
+      bEdit ? h('button.btn.btn-ghost.btn-block', { type: 'button', text: '+ Add exercise', style: 'margin-top:6px',
+        onclick: () => pickExercise(async (oEx) => { await guard(api.addSessionExercise(tId, oEx.id)); load(); }) }) : null,
+      h('button.btn.btn-block', { type: 'button', text: 'Delete workout',
+        style: 'margin-top:10px;background:none;color:var(--danger);box-shadow:inset 0 0 0 1px var(--line-strong)',
+        onclick: () => confirmAction('Delete this workout permanently?', async () => {
+          await guard(api.deleteSession(tId)); tCtx.navigate('/history');
+        }) }),
+    ]);
+  }
+
+  function exCard(oEx) {
+    const oHeader = h('div', { style: 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px' }, [
+      h('strong', { text: oEx.exercise_name }),
+      bEdit
+        ? h('button.icon-btn', { type: 'button', text: '×', title: 'Remove exercise',
+            onclick: () => confirmAction('Remove ' + oEx.exercise_name + ' from this workout?', async () => {
+              await guard(api.removeSessionExercise(oEx.id)); load(); }) })
+        : (oEx.muscle_group ? h('span.faint', { text: oEx.muscle_group }) : null),
+    ]);
+
+    let oNoteEl = oEx.notes ? h('p.ex-note', { text: '✎ ' + oEx.notes }) : null;
+    if (bEdit) {
+      const oIn = h('input.note-input', { type: 'text', value: oEx.notes || '', placeholder: 'Note…' });
+      let sSaved = oEx.notes || '';
+      oIn.addEventListener('blur', async () => {
+        const sVal = oIn.value.trim(); if (sVal === sSaved) return; sSaved = sVal;
+        try { await api.setSessionExerciseNote(oEx.id, sVal); } catch (tErr) { /* ignore */ }
+      });
+      oNoteEl = h('div', { style: 'margin:6px 0 8px' }, [oIn]);
+    }
+
+    const oMedia = (oEx.media && oEx.media.length)
+      ? h('div.clip-row', {}, oEx.media.map((oM) =>
+          h('div.clip', { onclick: () => openClip(oM, oEx.exercise_name) }, [h('span.clip-play', { text: '▶' })])))
+      : null;
+
+    const oRows = oEx.sets.map((oSet, i) => {
+      const sRest = (i > 0 && restGap(oEx.sets[i - 1], oSet)) || '–';
+      if (!bEdit) {
+        return h('tr', {}, [
           setMark(oSet),
           h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
           h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
-        ]))),
-      ]) : h('p.faint', { text: 'No sets recorded.' }),
-    ])),
-    h('button.btn.btn-block', { type: 'button', text: 'Delete workout',
-      style: 'margin-top:8px;background:none;color:var(--danger);box-shadow:inset 0 0 0 1px var(--line-strong)',
-      onclick: () => confirmAction('Delete this workout permanently?', async () => {
-        await guard(api.deleteSession(tId)); tCtx.navigate('/history');
-      }) }),
-  ]);
+          h('td.num.rest', { text: sRest }),
+        ]);
+      }
+      // editable row
+      const oW = h('input.num', { type: 'number', step: 'any', value: oSet.weight != null ? oSet.weight : '' });
+      const oR = h('input.num', { type: 'number', value: oSet.reps != null ? oSet.reps : '' });
+      const saveSet = async (sType) => {
+        await guard(api.updateSet(oSet.id, {
+          weight: oW.value === '' ? null : Number(oW.value),
+          reps: oR.value === '' ? null : Number(oR.value),
+          restSeconds: oSet.rest_seconds, rpe: oSet.rpe, notes: oSet.notes,
+          setType: sType || typeOf(oSet),
+        }));
+        load();
+      };
+      oW.addEventListener('change', () => saveSet());
+      oR.addEventListener('change', () => saveSet());
+      const oM = HIST_MARK[typeOf(oSet)];
+      return h('tr', {}, [
+        h('td.n' + (oM ? oM.c : ''), { style: 'cursor:pointer', title: 'Tap to change set type',
+          text: oM ? oM.t : String(oSet.set_number),
+          onclick: () => saveSet(SET_CYCLE[(SET_CYCLE.indexOf(typeOf(oSet)) + 1) % SET_CYCLE.length]) }),
+        h('td', {}, [oW]),
+        h('td', {}, [oR]),
+        h('td.num.rest', { text: sRest }),
+        h('td', { style: 'text-align:right' }, [
+          h('button.icon-btn', { type: 'button', text: '×', title: 'Delete set',
+            onclick: async () => { await guard(api.deleteSet(oSet.id)); load(); } }),
+        ]),
+      ]);
+    });
+
+    let oAddRow = null;
+    if (bEdit) {
+      const oW = h('input.num', { type: 'number', step: 'any', placeholder: 'lb' });
+      const oR = h('input.num', { type: 'number', placeholder: 'reps' });
+      const oLast = oEx.sets[oEx.sets.length - 1];
+      if (oLast) { if (oLast.weight != null) oW.value = oLast.weight; if (oLast.reps != null) oR.value = oLast.reps; }
+      oAddRow = h('div.inline-fields', { style: 'margin-top:10px' }, [
+        h('div', { style: 'flex:1' }, [oW]), h('div', { style: 'flex:1' }, [oR]),
+        h('button.btn.btn-sm', { type: 'button', text: 'Add set', style: 'flex:0 0 auto',
+          onclick: async () => {
+            await guard(api.addSet(oEx.id, { weight: oW.value === '' ? null : Number(oW.value), reps: oR.value === '' ? null : Number(oR.value) }));
+            load();
+          } }),
+      ]);
+    }
+
+    const oHead = bEdit
+      ? h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' }), h('th', { text: 'Rest' }), h('th', {})])
+      : h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' }), h('th', { text: 'Rest' })]);
+
+    return h('div.card', {}, [
+      oHeader, oNoteEl, oMedia,
+      oEx.sets.length ? h('table.set-table', {}, [h('thead', {}, oHead), h('tbody', {}, oRows)]) : h('p.faint', { text: 'No sets recorded.' }),
+      oAddRow,
+    ]);
+  }
+
+  mount(tRoot, h('div.empty', { text: 'Loading…' }));
+  await load();
 }
 
 function stat(sLabel, sValue, sUnit) {
@@ -164,9 +260,8 @@ function openClip(oM, sTitle) {
   });
 }
 
-// Read-only set-type marker for the history detail (W / M / D, else the number).
-const HIST_MARK = { warmup: { t: 'W', c: '.warm' }, myo: { t: 'M', c: '.myo' }, drop: { t: 'D', c: '.drop' } };
+// Read-only set-type marker (W / M / D, else the set number).
 function setMark(oSet) {
-  const oM = HIST_MARK[oSet.set_type || (oSet.is_warmup ? 'warmup' : 'normal')];
+  const oM = HIST_MARK[typeOf(oSet)];
   return h('td.n' + (oM ? oM.c : ''), { text: oM ? oM.t : String(oSet.set_number) });
 }

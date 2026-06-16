@@ -58,7 +58,7 @@ async function loadSession(tSessionId) {
   );
   for (const oExercise of oExercises) {
     oExercise.sets = await oDb.many(
-      `SELECT id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, set_type, notes
+      `SELECT id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, set_type, notes, performed_at
        FROM exercise_sets WHERE session_exercise_id = $1 ORDER BY set_number ASC, id ASC`,
       [oExercise.id]
     );
