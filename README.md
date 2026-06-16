@@ -17,13 +17,22 @@ One file, nothing to install — not even Node or a database.
 
 1. Get **`FitTrack.exe`** (build it with `npm run build:exe`, or use a copy
    someone shares with you).
-2. Double-click it. A console window opens and your browser pops up at
-   **http://localhost:8080**.
+2. Double-click it. Your browser opens at **http://localhost:8080** and the app
+   then runs **quietly in the background** — no window — with a **FitTrack icon
+   in your system tray** (bottom-right).
 3. Create a profile and start logging.
+
+Because it runs in the background, the server stays up so you can reach it from
+your **phone** anytime (`http://<your-computer-IP>:8080`) without keeping a
+window open on your PC.
+
+- **Reopen the app:** double-click the tray icon (or `FitTrack.exe` again), or
+  just visit the URL.
+- **Stop it:** right-click the tray icon → **Quit FitTrack**.
 
 Everything lives in a **`fittrack-data`** folder created next to the `.exe` (the
 SQLite database + your uploaded photos/videos). To move or back up your data,
-copy that folder. To stop the app, close the console window.
+copy that folder.
 
 > The camera / barcode scanner works because `localhost` is a secure context.
 > Profiles have no passwords — fine on your own PC.

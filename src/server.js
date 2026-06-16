@@ -16,6 +16,45 @@ const express = require('express');
 const oConfig = require('./config');
 const oAssets = require('./assets');
 
+// --- background mode (packaged Windows exe) ----------------------------------
+// So the server keeps running after you close the window: the first launch
+// re-spawns the exe detached with NO console window, then this visible process
+// exits. Closing the window therefore doesn't stop the server. Running the exe
+// again (or double-clicking the tray icon) just opens the browser to the
+// already-running server; "Quit FitTrack" in the tray is what actually stops it.
+if (oConfig.bSea && process.platform === 'win32' && process.env.FITTRACK_BG !== '1') {
+  launchInBackground();
+  return; // don't start a server in this console process
+}
+
+function launchInBackground() {
+  const sUrl = 'http://localhost:' + oConfig.iPort;
+  const openBrowser = () => {
+    try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
+    catch (tErr) { /* ignore */ }
+  };
+  const ping = () => new Promise((resolve) => {
+    const oReq = http.get({ host: '127.0.0.1', port: oConfig.iPort, path: '/api/health', timeout: 1000 },
+      (oRes) => { oRes.resume(); resolve(oRes.statusCode === 200); });
+    oReq.on('error', () => resolve(false));
+    oReq.on('timeout', () => { oReq.destroy(); resolve(false); });
+  });
+  (async () => {
+    if (await ping()) { openBrowser(); process.exit(0); } // already running -> just reopen
+    try {
+      spawn(process.execPath, process.argv.slice(1), {
+        detached: true, stdio: 'ignore', windowsHide: true,
+        env: Object.assign({}, process.env, { FITTRACK_BG: '1' }),
+      }).unref();
+    } catch (tErr) { /* ignore */ }
+    for (let i = 0; i < 40 && !(await ping()); i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    openBrowser();
+    process.exit(0);
+  })();
+}
+
 const oApp = express();
 
 // Log every hit to the activity ingest path BEFORE body parsing, so failed
@@ -203,13 +242,13 @@ if (oCerts) {
   http.createServer(oApp).listen(oConfig.iPort, oConfig.sHost, () => {
     const sUrl = 'http://localhost:' + oConfig.iPort;
     if (oConfig.bSea) {
-      console.log('\n  FitTrack is running.  Open ' + sUrl + ' in your browser.');
-      console.log('  Your data is stored in: ' + oConfig.sDataDir);
-      console.log('  Or right-click the FitTrack icon in your system tray.');
-      console.log('  Keep this window open while you use the app. Close it to stop.\n');
-      // Pop the browser open on launch + add a system-tray icon (Windows).
-      try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
-      catch (tErr) { /* ignore */ }
+      console.log('FitTrack running in the background on ' + sUrl + ' (data in ' + oConfig.sDataDir + ')');
+      // Open the browser only when this isn't the background relaunch (the
+      // launcher process already opened it for the packaged exe).
+      if (process.env.FITTRACK_BG !== '1') {
+        try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
+        catch (tErr) { /* ignore */ }
+      }
       startTray(sUrl);
       // Check GitHub for a newer build (applies on next launch). Fire-and-forget.
       try { require('./updater').checkForUpdate().catch(() => {}); } catch (tErr) { /* ignore */ }
