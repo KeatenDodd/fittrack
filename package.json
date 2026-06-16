@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22"
   },
-  "repository": "github:YOUR_GH_USERNAME/fittrack",
+  "repository": "github:KeatenDodd/fittrack",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",

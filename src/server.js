@@ -182,11 +182,6 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $ni.ContextMenuStrip = $menu
 $ni.add_MouseDoubleClick({ Start-Process '${sUrl}' })
 $ni.ShowBalloonTip(3000, 'FitTrack', 'Running in the tray - double-click to open.', [System.Windows.Forms.ToolTipIcon]::Info)
-# Auto-remove the tray icon when the server is no longer reachable (window closed).
-$t = New-Object System.Windows.Forms.Timer
-$t.Interval = 3000
-$t.add_Tick({ try { $req=[System.Net.WebRequest]::Create('${sUrl}/api/health'); $req.Timeout=2000; ($req.GetResponse()).Close() } catch { $ni.Visible=$false; [System.Windows.Forms.Application]::Exit() } })
-$t.Start()
 [System.Windows.Forms.Application]::Run()
 $ni.Dispose()
 `;
@@ -201,13 +196,14 @@ function startTray(sUrl) {
   } catch (tErr) { return; }
   try {
     const sEnc = Buffer.from(trayScript(sIcoPath, sUrl, process.pid), 'utf16le').toString('base64');
-    // NOT detached + -Sta: a detached child's WinForms Timer never ticks, so the
-    // icon's self-cleanup (when the server stops) would never run. Non-detached
-    // also shares the console, so closing the window removes the icon too.
+    // Detached so the icon's message loop is independent of this windowless
+    // background server's context; the icon stays put until you pick "Quit
+    // FitTrack". -Sta keeps WinForms happy. (No health-check timer — it would
+    // false-kill the icon when localhost resolves to IPv6.)
     const oTray = spawn('powershell', ['-NoProfile', '-Sta', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
-      '-EncodedCommand', sEnc], { detached: false, stdio: 'ignore', windowsHide: true });
+      '-EncodedCommand', sEnc], { detached: true, stdio: 'ignore', windowsHide: true });
     oTray.unref();
-    // Make sure the tray goes away when the server stops (Ctrl+C / normal exit).
+    // Remove the icon if the server exits cleanly (e.g. a crash with an exit handler).
     const killTray = () => { try { oTray.kill(); } catch (tErr) { /* gone */ } };
     process.on('exit', killTray);
     for (const sSig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
