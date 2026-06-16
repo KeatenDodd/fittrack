@@ -145,10 +145,10 @@ function supersetLabels(aExercises) {
 const SET_TYPE_MARK = { warmup: { t: 'W', c: '.warm' }, myo: { t: 'M', c: '.myo' }, drop: { t: 'D', c: '.drop' } };
 const SET_TYPE_CYCLE = ['normal', 'warmup', 'myo', 'drop'];
 function setTypeOf(oSet) { return oSet.set_type || (oSet.is_warmup ? 'warmup' : 'normal'); }
-function setMarkerCell(oSet, tOnClick) {
+function setMarkerCell(oSet, sLabel, tOnClick) {
   const oM = SET_TYPE_MARK[setTypeOf(oSet)];
   return h('td.n' + (oM ? oM.c : ''), { title: 'Tap to change set type', style: 'cursor:pointer',
-    text: oM ? oM.t : String(oSet.set_number), onclick: tOnClick });
+    text: sLabel, onclick: tOnClick });
 }
 
 function exerciseCard(oEx, tCtx) {
@@ -212,16 +212,23 @@ function exerciseCard(oEx, tCtx) {
     tCtx.reload();
   }
 
-  const oRows = oEx.sets.map((oSet, i) => h('tr', {}, [
-    setMarkerCell(oSet, () => cycleType(oSet)),
-    h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
-    h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
-    h('td.num.rest', { text: (i > 0 && restGap(oEx.sets[i - 1], oSet)) || '–' }),
-    h('td', { style: 'text-align:right' }, [
-      h('button.icon-btn', { type: 'button', text: '×', title: 'Delete set',
-        onclick: async () => { await guard(api.deleteSet(oSet.id)); tCtx.reload(); } }),
-    ]),
-  ]));
+  // Number only working (normal) sets — warmups/myo/drop show their letter and
+  // don't take a number, so the visible working sets read 1, 2, 3…
+  let iWork = 0;
+  const oRows = oEx.sets.map((oSet, i) => {
+    const oMark = SET_TYPE_MARK[setTypeOf(oSet)];
+    const sLabel = oMark ? oMark.t : String(iWork += 1);
+    return h('tr', {}, [
+      setMarkerCell(oSet, sLabel, () => cycleType(oSet)),
+      h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
+      h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
+      h('td.num.rest', { text: (i > 0 && restGap(oEx.sets[i - 1], oSet)) || '–' }),
+      h('td', { style: 'text-align:right' }, [
+        h('button.icon-btn', { type: 'button', text: '×', title: 'Delete set',
+          onclick: async () => { await guard(api.deleteSet(oSet.id)); tCtx.reload(); } }),
+      ]),
+    ]);
+  });
 
   [oWeight, oReps].forEach((tInput) =>
     tInput.addEventListener('keydown', (tEvent) => { if (tEvent.key === 'Enter') addSet(); }));

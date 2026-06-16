@@ -179,11 +179,15 @@ async function renderDetail(tRoot, tCtx, tId) {
           h('div.clip', { onclick: () => openClip(oM, oEx.exercise_name) }, [h('span.clip-play', { text: '▶' })])))
       : null;
 
+    // number only working (normal) sets; warmup/myo/drop show their letter
+    let iWork = 0;
     const oRows = oEx.sets.map((oSet, i) => {
       const sRest = (i > 0 && restGap(oEx.sets[i - 1], oSet)) || '–';
+      const oMark = HIST_MARK[typeOf(oSet)];
+      const sLabel = oMark ? oMark.t : String(iWork += 1);
       if (!bEdit) {
         return h('tr', {}, [
-          setMark(oSet),
+          setMark(oSet, sLabel),
           h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
           h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
           h('td.num.rest', { text: sRest }),
@@ -203,10 +207,9 @@ async function renderDetail(tRoot, tCtx, tId) {
       };
       oW.addEventListener('change', () => saveSet());
       oR.addEventListener('change', () => saveSet());
-      const oM = HIST_MARK[typeOf(oSet)];
       return h('tr', {}, [
-        h('td.n' + (oM ? oM.c : ''), { style: 'cursor:pointer', title: 'Tap to change set type',
-          text: oM ? oM.t : String(oSet.set_number),
+        h('td.n' + (oMark ? oMark.c : ''), { style: 'cursor:pointer', title: 'Tap to change set type',
+          text: sLabel,
           onclick: () => saveSet(SET_CYCLE[(SET_CYCLE.indexOf(typeOf(oSet)) + 1) % SET_CYCLE.length]) }),
         h('td', {}, [oW]),
         h('td', {}, [oR]),
@@ -260,8 +263,8 @@ function openClip(oM, sTitle) {
   });
 }
 
-// Read-only set-type marker (W / M / D, else the set number).
-function setMark(oSet) {
+// Read-only set-type marker (W / M / D, else the working-set number passed in).
+function setMark(oSet, sLabel) {
   const oM = HIST_MARK[typeOf(oSet)];
-  return h('td.n' + (oM ? oM.c : ''), { text: oM ? oM.t : String(oSet.set_number) });
+  return h('td.n' + (oM ? oM.c : ''), { text: sLabel });
 }
