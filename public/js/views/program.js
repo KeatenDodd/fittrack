@@ -25,38 +25,92 @@ function targetText(oT) {
   return oT.sets + ' × ' + sReps + sW;
 }
 
+// Common set/rep schemes. Fixed-rep schemes (low === high, e.g. 5×5) progress
+// linearly: hit every rep at the target weight → weight goes up next time.
+// Ranged schemes (e.g. 8–12) use double progression: hit the TOP of the range.
+const SCHEMES = [
+  { key: 'hyp',  label: '3 × 8–12  ·  Hypertrophy',          sets: 3, repLow: 8,  repHigh: 12, increment: 5 },
+  { key: '5x5',  label: '5 × 5  ·  StrongLifts (linear)',    sets: 5, repLow: 5,  repHigh: 5,  increment: 5 },
+  { key: '3x5',  label: '3 × 5  ·  Starting Strength',       sets: 3, repLow: 5,  repHigh: 5,  increment: 5 },
+  { key: '5x3',  label: '5 × 3  ·  Strength',                sets: 5, repLow: 3,  repHigh: 3,  increment: 5 },
+  { key: '4x68', label: '4 × 6–8  ·  Strength',              sets: 4, repLow: 6,  repHigh: 8,  increment: 5 },
+  { key: '3x10', label: '3 × 10–15  ·  Pump / accessory',    sets: 3, repLow: 12, repHigh: 15, increment: 5 },
+];
+function schemeApply(oEx, sKey) {
+  const oS = SCHEMES.find((s) => s.key === sKey);
+  if (!oS) return;
+  oEx.sets = oS.sets; oEx.repLow = oS.repLow; oEx.repHigh = oS.repHigh; oEx.increment = oS.increment;
+}
+function schemeMatch(oEx) {
+  const oS = SCHEMES.find((s) => Number(oEx.sets) === s.sets
+    && Number(oEx.repLow) === s.repLow && Number(oEx.repHigh) === s.repHigh);
+  return oS ? oS.key : 'custom';
+}
+
 export async function render(tRoot, tArgs, tCtx) {
   if (tArgs[0] === 'new') return renderBuilder(tRoot, tCtx);
 
   mount(tRoot, h('div.empty', { text: 'Loading…' }));
-  const oProgram = (await api.activeProgram()).program;
-
-  if (!oProgram) {
-    mount(tRoot, [
-      h('div.page-head', {}, [h('div.eyebrow', { text: 'Program' }), h('h1', { text: 'Mesocycle' })]),
-      h('div.empty', {}, [
-        h('p', { text: 'No active program. A program plans your training over a block of weeks and automatically progresses weight/reps and schedules a deload.' }),
-        h('button.btn.btn-accent', { type: 'button', text: 'Build a program',
-          onclick: () => tCtx.navigate('/program/new') }),
-      ]),
-    ]);
-    return;
-  }
-
-  renderOverview(tRoot, tCtx, oProgram);
+  const [oProgRes, oTplRes] = await Promise.all([api.activeProgram(), api.templates()]);
+  renderHub(tRoot, tCtx, oProgRes.program, oTplRes.templates);
 }
 
-// ---- active program overview -------------------------------------------------
-function renderOverview(tRoot, tCtx, oProgram) {
-  const bDeload = !!oProgram.is_deload_week;
-  const oNext = oProgram.next_day;
+// ---- hub: single workouts + program (the primary Train screen) ---------------
+function renderHub(tRoot, tCtx, oProgram, aTemplates) {
+  const reload = () => render(tRoot, [], tCtx);
 
+  async function startEmpty() {
+    const oData = await guard(api.startSession({ name: 'Quick workout' }));
+    oStore.activeSessionId = oData.session.id; tCtx.navigate('/workout');
+  }
+  async function startFrom(tId) {
+    const oData = await guard(api.startSession({ templateId: tId }));
+    oStore.activeSessionId = oData.session.id; tCtx.navigate('/workout');
+  }
   async function startNext() {
     const oData = await guard(api.startNextProgramDay(oProgram.id));
-    oStore.activeSessionId = oData.sessionId;
-    toast('Workout ready');
-    tCtx.navigate('/workout');
+    oStore.activeSessionId = oData.sessionId; toast('Workout ready'); tCtx.navigate('/workout');
   }
+
+  // --- single (individual) workout section ---
+  const oSingle = h('div', {}, [
+    h('h2', { text: 'Single workout' }),
+    h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Start empty workout', onclick: startEmpty, style: 'margin-bottom:14px' }),
+    h('div.meal-head', {}, [h('span.name', { text: 'From a template' }), h('a', { href: '#/templates', text: 'Manage' })]),
+    h('div.card.tight', {}, aTemplates.length
+      ? aTemplates.map((oT) => h('div.row.list-link', { onclick: () => startFrom(oT.id) }, [
+          h('div', {}, [h('div.label', { text: oT.name }), h('div.sub', { text: oT.exercise_count + ' exercises' })]),
+          h('span.faint', { text: 'Start →' }),
+        ]))
+      : [h('div.empty', {}, [h('p', { text: 'No templates yet.' }), h('a.btn.btn-ghost', { href: '#/templates', text: 'Create one' })])]),
+  ]);
+
+  // --- program section ---
+  const oProgramSection = oProgram
+    ? programSection(tCtx, oProgram, startNext, reload)
+    : h('div', {}, [
+        h('h2', { text: 'Program' }),
+        h('div.empty', {}, [
+          h('p', { text: 'Run a structured mesocycle with automatic progressive overload and a deload week — your weights climb as you hit your rep targets, and progress is tracked here.' }),
+          h('button.btn.btn-accent', { type: 'button', text: 'Build a program', onclick: () => tCtx.navigate('/program/new') }),
+        ]),
+      ]);
+
+  mount(tRoot, [
+    h('div.page-head', {}, [h('div.eyebrow', { text: 'Train' }), h('h1', { text: 'Start training' })]),
+    oStore.activeSessionId
+      ? h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Resume current workout',
+          onclick: () => tCtx.navigate('/workout'), style: 'margin-bottom:18px' })
+      : null,
+    oSingle,
+    h('div', { style: 'margin-top:26px' }, [oProgramSection]),
+  ]);
+}
+
+// ---- active program: next workout, metrics, working weights ------------------
+function programSection(tCtx, oProgram, tStartNext, tReload) {
+  const bDeload = !!oProgram.is_deload_week;
+  const oNext = oProgram.next_day;
 
   const oNextCard = oNext
     ? h('div.card', {}, [
@@ -72,45 +126,49 @@ function renderOverview(tRoot, tCtx, oProgram) {
             h('span.num', { text: targetText(oT) }),
           ]);
         })),
-        h('button.btn.btn-accent.btn-block', { type: 'button',
-          text: 'Start ' + oNext.name, onclick: startNext, style: 'margin-top:12px' }),
+        h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Start ' + oNext.name, onclick: tStartNext, style: 'margin-top:12px' }),
       ])
     : h('div.empty', { text: 'This program has no training days.' });
 
-  // full structure (all days)
-  const oStructure = h('div.card.tight', {}, (oProgram.days || []).map((oDay, iIdx) =>
-    h('div.row', {}, [
-      h('div', {}, [
-        h('div.label', { text: oDay.name + (iIdx === oProgram.current_day_index ? '  ◀ next' : '') }),
-        h('div.sub', { text: (oDay.exercises || []).map((e) => e.exercise_name).join(', ') || 'No exercises' }),
-      ]),
-    ])
-  ));
+  // working weights = the progressive-overload metric (current weight per lift)
+  const aLifts = [];
+  for (const oDay of (oProgram.days || [])) for (const oEx of (oDay.exercises || [])) aLifts.push(oEx);
+  const oWeights = h('div.card.tight', {}, aLifts.length
+    ? aLifts.map((oEx) => h('div.row', {}, [
+        h('div', {}, [h('div.label', { text: oEx.exercise_name }),
+          h('div.sub', { text: oEx.target_sets + ' × ' + oEx.rep_low + '–' + oEx.rep_high })]),
+        h('span.num', { text: oEx.current_weight != null ? num(oEx.current_weight, oEx.current_weight % 1 ? 1 : 0) + ' lb' : '—' }),
+      ]))
+    : [h('div.empty', { text: 'No exercises in this program.' })]);
 
-  mount(tRoot, [
-    h('div.page-head', {}, [
-      h('div.eyebrow', { text: 'Program' + (bDeload ? ' · deload week' : '') }),
-      h('h1', { text: oProgram.name }),
-      h('div.muted', { text: 'Week ' + oProgram.current_week + ' of ' + oProgram.weeks
-        + (oProgram.deload_enabled ? ' · auto-deload on the last week' : '') }),
+  return h('div', {}, [
+    h('h2', {}, ['Program', h('span.faint', { style: 'font-weight:400;font-size:13px', text: '  ' + oProgram.name })]),
+    h('div.stat-grid', {}, [
+      stat('Week', oProgram.current_week + ' / ' + oProgram.weeks, ''),
+      stat('Phase', bDeload ? 'Deload' : 'Build', ''),
+      stat('Days', String((oProgram.days || []).length), ''),
     ]),
     oNextCard,
-    h('h2', { text: 'Training days' }),
-    oStructure,
+    h('h2', { style: 'margin-top:18px', text: 'Working weights' }),
+    oWeights,
     h('div.btn-row', { style: 'margin-top:16px' }, [
       h('button.btn.btn-ghost', { type: 'button', text: 'Restart block',
         onclick: () => confirmAction('Restart at Week 1, Day 1? Your progressed weights are kept.', async () => {
-          await guard(api.restartProgram(oProgram.id)); toast('Block restarted'); render(tRoot, [], tCtx);
+          await guard(api.restartProgram(oProgram.id)); toast('Block restarted'); tReload();
         }) }),
-      h('button.btn.btn-ghost', { type: 'button', text: 'New program',
-        onclick: () => tCtx.navigate('/program/new') }),
+      h('button.btn.btn-ghost', { type: 'button', text: 'New program', onclick: () => tCtx.navigate('/program/new') }),
     ]),
     h('button.btn.btn-block', { type: 'button', text: 'Delete program',
       style: 'margin-top:10px;background:none;color:var(--danger);box-shadow:inset 0 0 0 1px var(--line-strong)',
       onclick: () => confirmAction('Delete "' + oProgram.name + '"? This cannot be undone.', async () => {
-        await guard(api.deleteProgram(oProgram.id)); toast('Program deleted'); render(tRoot, [], tCtx);
+        await guard(api.deleteProgram(oProgram.id)); toast('Program deleted'); tReload();
       }) }),
   ]);
+}
+
+function stat(sLabel, sValue, sUnit) {
+  return h('div.stat', {}, [h('div.k', { text: sLabel }),
+    h('div.v', {}, [h('span.num', { text: sValue }), sUnit ? h('small', { text: ' ' + sUnit }) : null])]);
 }
 
 // ---- builder -----------------------------------------------------------------
@@ -119,10 +177,11 @@ function renderBuilder(tRoot, tCtx) {
     name: '',
     weeks: 5,
     deloadEnabled: true,
+    defaultScheme: 'hyp',
     days: [{ name: 'Day 1', exercises: [] }],
   };
 
-  const oName = h('input', { type: 'text', placeholder: 'e.g. Hypertrophy block' });
+  const oName = h('input', { type: 'text', placeholder: 'e.g. StrongLifts 5×5' });
   oName.addEventListener('input', () => { oDraft.name = oName.value; });
 
   const oWeeks = h('input.num', { type: 'number', inputmode: 'numeric', value: '5', min: '2', max: '12', style: 'width:80px' });
@@ -130,6 +189,10 @@ function renderBuilder(tRoot, tCtx) {
 
   const oDeload = h('input', { type: 'checkbox', checked: true });
   oDeload.addEventListener('change', () => { oDraft.deloadEnabled = oDeload.checked; });
+
+  const oScheme = h('select', {}, SCHEMES.map((s) =>
+    h('option', { value: s.key, text: s.label, selected: s.key === oDraft.defaultScheme })));
+  oScheme.addEventListener('change', () => { oDraft.defaultScheme = oScheme.value; });
 
   const oDaysRoot = h('div');
 
@@ -158,10 +221,12 @@ function renderBuilder(tRoot, tCtx) {
       oExRoot,
       h('button.btn.btn-ghost.btn-block', { type: 'button', text: '+ Add exercise', style: 'margin-top:8px',
         onclick: () => pickExercise((oPicked) => {
-          oDay.exercises.push({
+          const oNew = {
             exerciseId: oPicked.id, exercise_name: oPicked.name, muscle_group: oPicked.muscle_group,
             sets: 3, repLow: 8, repHigh: 12, weight: '', increment: 5,
-          });
+          };
+          schemeApply(oNew, oDraft.defaultScheme);
+          oDay.exercises.push(oNew);
           renderExercises();
         }) }),
     ]);
@@ -174,12 +239,22 @@ function renderBuilder(tRoot, tCtx) {
       oInput.addEventListener('input', () => { oEx[sKey] = oInput.value; });
       return oInput;
     };
+    const oSchemeSel = h('select', {}, [
+      ...SCHEMES.map((s) => h('option', { value: s.key, text: s.label })),
+      h('option', { value: 'custom', text: 'Custom' }),
+    ]);
+    oSchemeSel.value = schemeMatch(oEx);
+    oSchemeSel.addEventListener('change', () => {
+      if (oSchemeSel.value !== 'custom') { schemeApply(oEx, oSchemeSel.value); reRender(); }
+    });
+
     return h('div', { style: 'padding:8px 0;border-top:1px solid var(--line)' }, [
       h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' }, [
         h('strong', { text: oEx.exercise_name }),
         h('button.icon-btn', { type: 'button', text: '×', title: 'Remove',
           onclick: () => { oDay.exercises.splice(iEx, 1); reRender(); } }),
       ]),
+      h('label.field', {}, [h('span.lbl', { text: 'Scheme' }), oSchemeSel]),
       h('div.inline-fields', { style: 'flex-wrap:wrap;gap:8px' }, [
         field('Sets', mk('sets', '3', '56px')),
         field('Rep low', mk('repLow', '8', '56px')),
@@ -220,6 +295,8 @@ function renderBuilder(tRoot, tCtx) {
         h('label', { style: 'display:flex;gap:8px;align-items:center;padding-bottom:10px' },
           [oDeload, h('span.faint', { text: 'Auto-deload last week' })]),
       ]),
+      h('label.field', { style: 'margin-bottom:0' }, [
+        h('span.lbl', { text: 'Default scheme for new exercises' }), oScheme]),
     ]),
     h('h2', { text: 'Training days' }),
     oDaysRoot,

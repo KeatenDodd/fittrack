@@ -11,14 +11,14 @@ oRouter.use(oAuth.requireAuth);
 // Returns date, top weight, estimated 1RM (Epley), and working-set volume.
 oRouter.get('/exercise/:id', wrap(async (tReq, tRes) => {
   const oRows = await oDb.many(
-    `SELECT s.id AS session_id, s.started_at::date AS day,
+    `SELECT s.id AS session_id, date(s.started_at) AS day,
             MAX(st.weight) AS top_weight,
             MAX(st.weight * (1 + st.reps / 30.0)) AS est_one_rm,
-            SUM(st.weight * st.reps) FILTER (WHERE st.is_warmup = false) AS volume,
-            SUM(st.reps) FILTER (WHERE st.is_warmup = false) AS total_reps,
-            COUNT(*) FILTER (WHERE st.is_warmup = false)::int AS total_sets,
-            MAX(st.reps) FILTER (WHERE st.is_warmup = false) AS top_reps,
-            string_agg(DISTINCT NULLIF(se.notes, ''), ' · ') AS note
+            SUM(st.weight * st.reps) FILTER (WHERE st.is_warmup = 0) AS volume,
+            SUM(st.reps) FILTER (WHERE st.is_warmup = 0) AS total_reps,
+            COUNT(*) FILTER (WHERE st.is_warmup = 0) AS total_sets,
+            MAX(st.reps) FILTER (WHERE st.is_warmup = 0) AS top_reps,
+            group_concat(DISTINCT NULLIF(se.notes, '')) AS note
      FROM workout_sessions s
      JOIN session_exercises se ON se.session_id = s.id
      JOIN exercise_sets st ON st.session_exercise_id = se.id
@@ -48,9 +48,13 @@ oRouter.get('/exercises', wrap(async (tReq, tRes) => {
 
 // GET /api/stats/overview  -> headline counts for the dashboard
 oRouter.get('/overview', wrap(async (tReq, tRes) => {
+  // "This week" runs Sunday -> Saturday: count sessions on/after the most recent
+  // Sunday (start of the current calendar week), not a rolling 7-day window.
   const oWorkouts = await oDb.one(
-    `SELECT COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE started_at > now() - interval '7 days')::int AS this_week
+    `SELECT COUNT(*) AS total,
+            COUNT(*) FILTER (
+              WHERE date(started_at) >= date('now','localtime','-' || strftime('%w','now','localtime') || ' days')
+            ) AS this_week
      FROM workout_sessions WHERE user_id = $1`,
     [tReq.iUserId]
   );
@@ -60,11 +64,12 @@ oRouter.get('/overview', wrap(async (tReq, tRes) => {
     [tReq.iUserId]
   );
   const oVolume = await oDb.one(
-    `SELECT COALESCE(SUM(st.weight * st.reps), 0)::numeric AS volume
+    `SELECT COALESCE(SUM(st.weight * st.reps), 0) AS volume
      FROM workout_sessions s
      JOIN session_exercises se ON se.session_id = s.id
-     JOIN exercise_sets st ON st.session_exercise_id = se.id AND st.is_warmup = false
-     WHERE s.user_id = $1 AND s.started_at > now() - interval '7 days'`,
+     JOIN exercise_sets st ON st.session_exercise_id = se.id AND st.is_warmup = 0
+     WHERE s.user_id = $1
+       AND date(s.started_at) >= date('now','localtime','-' || strftime('%w','now','localtime') || ' days')`,
     [tReq.iUserId]
   );
   tRes.json({

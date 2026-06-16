@@ -111,7 +111,7 @@ export async function render(tRoot, tArgs, tCtx) {
     oStatGrid,
     h('div.btn-row', { style: 'margin-bottom:20px' }, [
       h('button.btn.btn-accent', { type: 'button', text: oStore.activeSessionId ? 'Resume workout' : 'Start workout',
-        onclick: () => tCtx.navigate('/workout') }),
+        onclick: () => tCtx.navigate(oStore.activeSessionId ? '/workout' : '/program') }),
       h('button.btn.btn-ghost', { type: 'button', text: 'Log food', onclick: () => tCtx.navigate('/nutrition') }),
     ]),
     h('h2', {}, ["Today's activity", h('a.h2-link', { href: '#/activity', text: 'Sync / log' })]),

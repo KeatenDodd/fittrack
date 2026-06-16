@@ -139,7 +139,7 @@ async function renderDetail(tRoot, tCtx, tId) {
       oEx.sets.length ? h('table.set-table', {}, [
         h('thead', {}, h('tr', {}, [h('th.n', { text: '#' }), h('th', { text: 'Weight' }), h('th', { text: 'Reps' })])),
         h('tbody', {}, oEx.sets.map((oSet) => h('tr', {}, [
-          h('td.n' + (oSet.is_warmup ? '.warm' : ''), { text: oSet.is_warmup ? 'W' : String(oSet.set_number) }),
+          setMark(oSet),
           h('td.num', { text: oSet.weight != null ? num(oSet.weight, oSet.weight % 1 ? 1 : 0) : '–' }),
           h('td.num', { text: oSet.reps != null ? String(oSet.reps) : '–' }),
         ]))),
@@ -162,4 +162,11 @@ function openClip(oM, sTitle) {
   openSheet(sTitle || 'Clip', (tBody) => {
     mount(tBody, h('video', { src: oM.url, controls: true, playsinline: true, style: 'width:100%;border-radius:8px' }));
   });
+}
+
+// Read-only set-type marker for the history detail (W / M / D, else the number).
+const HIST_MARK = { warmup: { t: 'W', c: '.warm' }, myo: { t: 'M', c: '.myo' }, drop: { t: 'D', c: '.drop' } };
+function setMark(oSet) {
+  const oM = HIST_MARK[oSet.set_type || (oSet.is_warmup ? 'warmup' : 'normal')];
+  return h('td.n' + (oM ? oM.c : ''), { text: oM ? oM.t : String(oSet.set_number) });
 }

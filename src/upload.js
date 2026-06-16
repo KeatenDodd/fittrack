@@ -5,8 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { httpError } = require('./util');
+const oConfig = require('./config');
 
-const sUploadsDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+const sUploadsDir = process.env.UPLOAD_DIR || path.join(oConfig.sDataDir, 'uploads');
 fs.mkdirSync(sUploadsDir, { recursive: true });
 
 const EXT = {

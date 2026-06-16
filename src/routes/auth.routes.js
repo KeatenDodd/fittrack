@@ -28,11 +28,10 @@ function normSex(tVal) {
 async function issueSession(tUser, tDevice) {
   const sAccess = oAuth.signAccessToken(tUser);
   const oRefresh = oAuth.newRefreshToken();
-  const oExpires = new Date(Date.now() + oConfig.iRefreshDays * 86400000);
   await oDb.query(
     `INSERT INTO refresh_tokens (user_id, token_hash, device, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [tUser.id, oRefresh.sHash, String(tDevice || 'web').slice(0, 100), oExpires]
+     VALUES ($1, $2, $3, datetime('now','localtime','+${oConfig.iRefreshDays} days'))`,
+    [tUser.id, oRefresh.sHash, String(tDevice || 'web').slice(0, 100)]
   );
   return { accessToken: sAccess, refreshToken: oRefresh.sRaw, user: publicUser(tUser) };
 }
@@ -85,7 +84,7 @@ oRouter.post('/refresh', wrap(async (tReq, tRes) => {
   const oToken = await oDb.one(
     `SELECT rt.*, u.username FROM refresh_tokens rt
      JOIN users u ON u.id = rt.user_id
-     WHERE rt.token_hash = $1 AND rt.expires_at > now()`,
+     WHERE rt.token_hash = $1 AND rt.expires_at > datetime('now','localtime')`,
     [sHash]
   );
   if (!oToken) throw httpError(401, 'Session expired, pick your profile again');
@@ -93,11 +92,10 @@ oRouter.post('/refresh', wrap(async (tReq, tRes) => {
   // Rotate: delete old, issue new.
   await oDb.query('DELETE FROM refresh_tokens WHERE id = $1', [oToken.id]);
   const oRefresh = oAuth.newRefreshToken();
-  const oExpires = new Date(Date.now() + oConfig.iRefreshDays * 86400000);
   await oDb.query(
     `INSERT INTO refresh_tokens (user_id, token_hash, device, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [oToken.user_id, oRefresh.sHash, oToken.device, oExpires]
+     VALUES ($1, $2, $3, datetime('now','localtime','+${oConfig.iRefreshDays} days'))`,
+    [oToken.user_id, oRefresh.sHash, oToken.device]
   );
   const sAccess = oAuth.signAccessToken({ id: oToken.user_id, username: oToken.username });
   tRes.json({ accessToken: sAccess, refreshToken: oRefresh.sRaw });

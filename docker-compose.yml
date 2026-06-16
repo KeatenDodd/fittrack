@@ -1,0 +1,26 @@
+# FitTrack — one-command local run. From the project folder:
+#
+#   docker compose up -d        # build + start (first run takes a minute)
+#   open http://localhost:1308
+#   docker compose down         # stop (data is kept)
+#   docker compose down -v      # stop and ERASE all data
+#
+# Embedded SQLite — no separate database. All data stays on this machine in the
+# named volume below.
+services:
+  app:
+    build: .
+    environment:
+      # Change this to any random string before sharing.
+      JWT_SECRET: change-me-please-any-random-string
+      PORT: "1308"
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+    ports:
+      - "1308:1308"
+    volumes:
+      - fittrack:/data    # SQLite db + uploaded photos/videos persist here
+    restart: unless-stopped
+
+volumes:
+  fittrack:

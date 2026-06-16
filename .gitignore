@@ -3,3 +3,7 @@ node_modules/
 certs/*.pem
 npm-debug.log
 uploads/
+data/
+dist/
+build/
+fittrack-data/

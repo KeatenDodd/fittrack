@@ -63,7 +63,7 @@ function targetsFor(oPe, bDeload) {
 // GET /api/programs/active  -> the current active program (or null)
 oRouter.get('/active', wrap(async (tReq, tRes) => {
   const oRow = await oDb.one(
-    'SELECT id FROM programs WHERE user_id = $1 AND active = true ORDER BY created_at DESC LIMIT 1',
+    'SELECT id FROM programs WHERE user_id = $1 AND active = 1 ORDER BY created_at DESC LIMIT 1',
     [tReq.iUserId]
   );
   tRes.json({ program: oRow ? await loadProgram(oRow.id) : null });
@@ -86,7 +86,7 @@ oRouter.post('/', wrap(async (tReq, tRes) => {
   const iWeeks = Math.min(Math.max(parseInt(tReq.body.weeks || '5', 10) || 5, 2), 12);
   const bDeload = tReq.body.deloadEnabled !== false;
 
-  await oDb.query('UPDATE programs SET active = false WHERE user_id = $1', [tReq.iUserId]);
+  await oDb.query('UPDATE programs SET active = 0 WHERE user_id = $1', [tReq.iUserId]);
   const oProgram = await oDb.one(
     `INSERT INTO programs (user_id, name, weeks, deload_enabled) VALUES ($1, $2, $3, $4) RETURNING id`,
     [tReq.iUserId, sName, iWeeks, bDeload]
@@ -176,7 +176,7 @@ async function applyProgression(oSession) {
     if (bWasDeload) continue; // deloads don't progress weight
 
     const aSets = await oDb.many(
-      'SELECT weight, reps FROM exercise_sets WHERE session_exercise_id = $1 AND is_warmup = false',
+      'SELECT weight, reps FROM exercise_sets WHERE session_exercise_id = $1 AND is_warmup = 0',
       [oSe.id]
     );
     const fTargetW = oSe.target_weight != null ? Number(oSe.target_weight)
@@ -197,7 +197,7 @@ async function applyProgression(oSession) {
 
   // advance position: next day; wrap -> next week; past last week -> new block
   const iDayCount = (await oDb.one(
-    'SELECT COUNT(*)::int AS n FROM program_days WHERE program_id = $1', [oProgram.id])).n;
+    'SELECT COUNT(*) AS n FROM program_days WHERE program_id = $1', [oProgram.id])).n;
   let iNextDay = oProgram.current_day_index + 1;
   let iNextWeek = oProgram.current_week;
   let bNewBlock = false;
@@ -214,9 +214,9 @@ async function applyProgression(oSession) {
 // POST /api/programs/:id/restart  -> begin a fresh block (week 1), keep weights
 oRouter.post('/:id/restart', wrap(async (tReq, tRes) => {
   if (!(await ownProgram(tReq.params.id, tReq.iUserId))) throw httpError(404, 'Program not found');
-  await oDb.query('UPDATE programs SET active = false WHERE user_id = $1', [tReq.iUserId]);
+  await oDb.query('UPDATE programs SET active = 0 WHERE user_id = $1', [tReq.iUserId]);
   await oDb.query(
-    'UPDATE programs SET active = true, current_week = 1, current_day_index = 0 WHERE id = $1',
+    'UPDATE programs SET active = 1, current_week = 1, current_day_index = 0 WHERE id = $1',
     [tReq.params.id]
   );
   tRes.json({ program: await loadProgram(tReq.params.id) });

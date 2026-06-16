@@ -25,7 +25,7 @@ oRouter.post('/', wrap(async (tReq, tRes) => {
   if (!sName) throw httpError(400, 'Name is required');
   const oExercise = await oDb.one(
     `INSERT INTO exercises (name, category, muscle_group, equipment, is_custom, created_by, notes)
-     VALUES ($1, $2, $3, $4, true, $5, $6) RETURNING *`,
+     VALUES ($1, $2, $3, $4, 1, $5, $6) RETURNING *`,
     [
       sName,
       tReq.body.category || null,

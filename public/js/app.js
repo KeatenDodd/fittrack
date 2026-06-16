@@ -2,6 +2,7 @@
 import { oStore } from './store.js';
 import { api } from './api.js';
 import { h, mount, clear, toast } from './ui.js';
+import { initPullToRefresh } from './ptr.js';
 
 import * as viewAuth from './views/auth.js';
 import * as viewDashboard from './views/dashboard.js';
@@ -20,16 +21,16 @@ import * as viewCycle from './views/cycle.js';
 // route key -> { label, icon (svg path), view, nav (show in bars) }
 const oRoutes = {
   dashboard: { label: 'Home', icon: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10', view: viewDashboard, nav: true },
-  workout:   { label: 'Workout', icon: 'M6 7v10M18 7v10M3 9v6M21 9v6M6 12h12', view: viewWorkout, nav: true },
+  program:   { label: 'Program', icon: 'M6 7v10M18 7v10M3 9v6M21 9v6M6 12h12', view: viewProgram, nav: true },
   nutrition: { label: 'Food', icon: 'M6 3v8a3 3 0 006 0V3M9 3v18M17 3c-1.5 1-2 3-2 6s.5 4 2 4v8', view: viewNutrition, nav: true },
   body:      { label: 'Body', icon: 'M12 5a2 2 0 100-4 2 2 0 000 4zM6 9l6-2 6 2M12 7v7m0 0l-3 7m3-7l3 7', view: viewBody, nav: true },
   progress:  { label: 'Progress', icon: 'M4 19V5m0 14h16M8 15l3-4 3 2 4-6', view: viewProgress, nav: true },
+  workout:   { label: 'Workout', icon: '', view: viewWorkout, nav: false },
   templates: { label: 'Templates', icon: '', view: viewTemplates, nav: false },
   history:   { label: 'History', icon: '', view: viewHistory, nav: false },
   import:    { label: 'Import', icon: '', view: viewImport, nav: false },
   activity:  { label: 'Activity', icon: '', view: viewActivity, nav: false },
   settings:  { label: 'Settings', icon: '', view: viewSettings, nav: false },
-  program:   { label: 'Program', icon: '', view: viewProgram, nav: false },
   cycle:     { label: 'Cycle', icon: '', view: viewCycle, nav: false },
 };
 
@@ -76,7 +77,6 @@ function renderHeaderUser() {
   const oUser = oStore.user;
   clear(oEl);
   if (!oUser) return;
-  oEl.appendChild(h('a', { href: '#/program', text: 'Program' }));
   if (oUser.sex === 'female') oEl.appendChild(h('a', { href: '#/cycle', text: 'Cycle' }));
   oEl.appendChild(h('a', { href: '#/history', text: 'History' }));
   oEl.appendChild(h('a', { href: '#/settings', text: 'Settings' }));
@@ -98,7 +98,8 @@ async function route() {
 
   const { sKey, aArgs } = currentRoute();
   const oRoute = oRoutes[sKey] || oRoutes.dashboard;
-  renderNav(oRoutes[sKey] && oRoutes[sKey].nav ? sKey : (sKey === 'templates' || sKey === 'history' || sKey === 'program' || sKey === 'cycle' ? 'workout' : sKey));
+  renderNav(oRoutes[sKey] && oRoutes[sKey].nav ? sKey
+    : (['workout', 'templates', 'history', 'cycle'].includes(sKey) ? 'program' : sKey));
 
   clear(oView);
   try {
@@ -142,4 +143,5 @@ async function boot() {
 }
 
 window.addEventListener('hashchange', route);
+initPullToRefresh();
 boot();

@@ -24,7 +24,7 @@ function publicRow(tRow) {
 // GET /api/photos -> all of this user's progress photos (newest first)
 oRouter.get('/', wrap(async (tReq, tRes) => {
   const aRows = await oDb.many(
-    `SELECT id, to_char(taken_on, 'YYYY-MM-DD') AS taken_on, angle, file_path, mime
+    `SELECT id, strftime('%Y-%m-%d', taken_on) AS taken_on, angle, file_path, mime
      FROM progress_photos WHERE user_id = $1
      ORDER BY taken_on DESC, id DESC`,
     [tReq.iUserId]
@@ -42,7 +42,7 @@ oRouter.post('/', wrap(async (tReq, tRes) => {
   const oRow = await oDb.one(
     `INSERT INTO progress_photos (user_id, taken_on, angle, file_path, mime)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, to_char(taken_on, 'YYYY-MM-DD') AS taken_on, angle, file_path, mime`,
+     RETURNING id, strftime('%Y-%m-%d', taken_on) AS taken_on, angle, file_path, mime`,
     [tReq.iUserId, sDate, sAngle, oSaved.relPath, oSaved.mime]
   );
   tRes.status(201).json({ photo: publicRow(oRow) });

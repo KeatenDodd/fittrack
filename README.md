@@ -5,59 +5,116 @@ workouts with sets/reps and a rest timer, save templates, track body weight and
 measurements, log food (search, barcode scan, or custom entries) with macro and
 micronutrient totals against daily goals, and watch progress charts over time.
 
-Built to match the TableFlow stack: **Node.js / Express / PostgreSQL** backend
-with a **vanilla JS** single-page front end (no build step).
+**Node.js / Express** backend with an **embedded SQLite** database (no separate
+database server) and a **vanilla JS** single-page front end (no build step). Runs
+as a normal Node app, a Docker container, or a single self-contained `.exe`.
 
 ---
 
-## What you need
+## Easiest: the Windows app (FitTrack.exe)
 
-- **Node.js 18 or newer** (uses the built-in `fetch`).
-- **PostgreSQL 14+** running somewhere this app can reach.
-- **mkcert** (optional but recommended) so the phone camera / barcode scanner
-  works — browsers only allow the camera over HTTPS or `localhost`.
+One file, nothing to install — not even Node or a database.
 
----
+1. Get **`FitTrack.exe`** (build it with `npm run build:exe`, or use a copy
+   someone shares with you).
+2. Double-click it. A console window opens and your browser pops up at
+   **http://localhost:8080**.
+3. Create a profile and start logging.
 
-## 1. Install and create the database
+Everything lives in a **`fittrack-data`** folder created next to the `.exe` (the
+SQLite database + your uploaded photos/videos). To move or back up your data,
+copy that folder. To stop the app, close the console window.
+
+> The camera / barcode scanner works because `localhost` is a secure context.
+> Profiles have no passwords — fine on your own PC.
+
+### Auto-updates (GitHub Releases)
+
+Installed copies of `FitTrack.exe` update themselves from your GitHub releases.
+On launch the app checks your repo's latest release; if it's newer it downloads
+the new exe in the background and **swaps it in the next time the app is closed
+and reopened**. Data in `fittrack-data` is never touched.
+
+One-time setup:
+
+1. Put this project in a GitHub repo and set **`"repository"`** in
+   `package.json` to it, e.g. `"github:yourname/fittrack"`.
+2. Install the **[GitHub CLI](https://cli.github.com/)** and run `gh auth login`.
+
+To ship an update after making changes:
 
 ```bash
-# from the project folder
+npm version patch      # bump 1.0.0 -> 1.0.1 (or `minor` / `major`)
+npm run release        # builds the exe and publishes it to GitHub Releases
+```
+
+Everyone's installed app picks it up on its next launch. (The exe isn't
+code-signed, so the *first* download a friend does may show a Windows SmartScreen
+prompt — "More info → Run anyway". Auto-updates after that are silent.)
+
+---
+
+## Run with Docker (also one command)
+
+Keep all data on your machine with no Node or database to install.
+
+1. Install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
+   and start it.
+2. From this project folder, run:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   The first run builds the image and initializes the database automatically
+   (takes a minute).
+3. Open **http://localhost:1308** and create a profile.
+
+That's it. The camera / barcode scanner works because `localhost` counts as a
+secure context. Everything (database + uploaded photos/videos) lives in local
+Docker volumes on your machine.
+
+```bash
+docker compose logs -f app   # watch the server logs
+docker compose down          # stop it (keeps your data)
+docker compose down -v       # stop AND erase all data
+```
+
+> Before sharing, change `JWT_SECRET` in `docker-compose.yml` to any random
+> string. Profiles have no passwords, so anyone who can reach the URL can use
+> the app — fine on your own machine / home network.
+
+To reach it from your **phone** on the same Wi-Fi, browse to
+`http://<your-computer-IP>:1308`. The camera needs HTTPS off `localhost`, so for
+phone camera use either skip the scanner or follow the mkcert steps below.
+
+---
+
+## Run with Node (for development)
+
+You need **Node.js 22 or newer** (it uses the built-in `node:sqlite` module).
+
+```bash
 npm install
+npm start
 ```
 
-Create the database and a role (adjust names/passwords to taste):
+That's it — **there's no database to set up**. On first run the app creates an
+embedded **SQLite** database and loads the starter data (~35 exercises, the
+nutrient catalog, body-measurement types) automatically. Your data lives in
+`data/fittrack.db`.
 
-```bash
-# as a postgres superuser
-createuser fittrack --pwprompt        # set a password when asked
-createdb fittrack --owner fittrack
-```
+Optional configuration (a `.env` file or environment variables):
 
-## 2. Configure
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and set at least:
-
-- `DATABASE_URL` — e.g. `postgres://fittrack:YOURPASSWORD@localhost:5432/fittrack`
-- `JWT_SECRET` — paste a long random string (e.g. `openssl rand -hex 32`)
-- `HOST=0.0.0.0` so other devices on your WiFi can reach it
+- `JWT_SECRET` — a long random string (e.g. `openssl rand -hex 32`)
+- `HOST=0.0.0.0` so other devices on your Wi-Fi can reach it
 - `PORT=8443` (or whatever you like)
+- `DATA_DIR` / `DB_FILE` — where the SQLite db + uploads are stored
+- `OFF_BASE` — Open Food Facts base URL (for the barcode lookup)
 
-## 3. Load the schema + starter data
+To build the standalone `FitTrack.exe`: `npm run build:exe` (output in `dist/`).
 
-```bash
-npm run db:init
-```
-
-This applies `db/schema.sql` then `db/seed.sql` (≈35 starter exercises, the
-nutrient catalog, and body-measurement types). Run it once on a fresh database.
-To start over: drop and recreate the database, then run it again.
-
-## 4. (Recommended) Trusted HTTPS for the camera
+## Trusted HTTPS for the camera (optional)
 
 The barcode scanner needs a secure context. `mkcert` makes a locally-trusted
 certificate so phones don't show scary warnings.
@@ -66,7 +123,7 @@ certificate so phones don't show scary warnings.
 # install mkcert (see https://github.com/FiloSottile/mkcert), then:
 mkcert -install
 
-# find your computer's LAN IP first (see step 6), then issue a cert for it:
+# find your computer's LAN IP first (see below), then issue a cert for it:
 mkcert -key-file certs/key.pem -cert-file certs/cert.pem 192.168.1.50 localhost
 ```
 
@@ -78,15 +135,7 @@ To trust the cert on your phone, install mkcert's root CA on the device
 (`mkcert -CAROOT` shows where `rootCA.pem` lives; email/AirDrop it to the phone
 and install it in settings).
 
-## 5. Start it
-
-```bash
-npm start
-```
-
-You'll see either `FitTrack (HTTPS) on https://0.0.0.0:8443` or an HTTP notice.
-
-## 6. Open it from your phone and PC
+## Open it from your phone and PC
 
 Find your computer's LAN IP:
 

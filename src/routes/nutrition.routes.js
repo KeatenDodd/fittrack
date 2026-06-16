@@ -210,7 +210,7 @@ oRouter.get('/log', wrap(async (tReq, tRes) => {
     `SELECT l.id, l.meal_type, l.quantity, l.unit, l.logged_at,
             f.id AS food_id, f.name, f.brand, f.base_unit, f.serving_size
      FROM food_log l JOIN foods f ON f.id = l.food_id
-     WHERE l.user_id = $1 AND l.logged_at::date = $2::date
+     WHERE l.user_id = $1 AND date(l.logged_at) = date($2)
      ORDER BY l.logged_at ASC`,
     [tReq.iUserId, sDate]
   );
@@ -236,7 +236,7 @@ oRouter.post('/log', wrap(async (tReq, tRes) => {
   if (!oFood) throw httpError(404, 'Food not found — save it first');
   const oRow = await oDb.one(
     `INSERT INTO food_log (user_id, food_id, meal_type, quantity, unit, logged_at)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6, now())) RETURNING *`,
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, datetime('now','localtime'))) RETURNING *`,
     [tReq.iUserId, tReq.body.foodId, tReq.body.mealType || 'snack', fQuantity,
      tReq.body.unit || 'g', tReq.body.loggedAt || null]
   );
@@ -274,7 +274,7 @@ oRouter.get('/summary', wrap(async (tReq, tRes) => {
      FROM food_log l
      JOIN food_nutrients fn ON fn.food_id = l.food_id
      JOIN nutrients n ON n.id = fn.nutrient_id
-     WHERE l.user_id = $1 AND l.logged_at::date = $2::date
+     WHERE l.user_id = $1 AND date(l.logged_at) = date($2)
      GROUP BY n.id, n.key, n.name, n.unit, n.category`,
     [tReq.iUserId, sDate]
   );
@@ -304,14 +304,14 @@ oRouter.get('/trend', wrap(async (tReq, tRes) => {
   const sTo = String(tReq.query.to || new Date().toISOString().slice(0, 10));
   const sFrom = String(tReq.query.from || '');
   const oRows = await oDb.many(
-    `SELECT l.logged_at::date AS day, n.key, SUM(fn.amount * l.quantity / 100.0) AS total
+    `SELECT date(l.logged_at) AS day, n.key, SUM(fn.amount * l.quantity / 100.0) AS total
      FROM food_log l
      JOIN food_nutrients fn ON fn.food_id = l.food_id
      JOIN nutrients n ON n.id = fn.nutrient_id
      WHERE l.user_id = $1
        AND n.key IN ('energy_kcal','protein_g','carbs_g','fat_g')
-       AND l.logged_at::date <= $2::date
-       AND ($3 = '' OR l.logged_at::date >= $3::date)
+       AND date(l.logged_at) <= date($2)
+       AND ($3 = '' OR date(l.logged_at) >= date($3))
      GROUP BY day, n.key ORDER BY day ASC`,
     [tReq.iUserId, sTo, sFrom]
   );

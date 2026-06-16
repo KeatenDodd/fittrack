@@ -192,7 +192,7 @@ oRouter.post('/strong', wrap(async (tReq, tRes) => {
     } else {
       const oNew = await oClient.query(
         `INSERT INTO exercises (name, equipment, is_custom, created_by)
-         VALUES ($1, $2, true, $3) RETURNING id`,
+         VALUES ($1, $2, 1, $3) RETURNING id`,
         [sExerciseName, inferEquipment(sExerciseName), tReq.iUserId]
       );
       iId = oNew.rows[0].id;

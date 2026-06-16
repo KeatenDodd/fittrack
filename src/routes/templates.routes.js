@@ -51,7 +51,7 @@ async function setTemplateExercises(tTemplateId, tExercises) {
 // GET /api/templates  -> list with exercise counts
 oRouter.get('/', wrap(async (tReq, tRes) => {
   const oTemplates = await oDb.many(
-    `SELECT t.*, COUNT(te.id)::int AS exercise_count
+    `SELECT t.*, COUNT(te.id) AS exercise_count
      FROM workout_templates t
      LEFT JOIN template_exercises te ON te.template_id = t.id
      WHERE t.user_id = $1

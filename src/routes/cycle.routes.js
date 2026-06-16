@@ -78,7 +78,7 @@ function computeStats(aLogs) {
 // Load all of a user's cycle days (used by every response).
 async function loadLogs(tUserId) {
   return oDb.many(
-    `SELECT to_char(date, 'YYYY-MM-DD') AS date, flow, symptoms, mood, notes
+    `SELECT strftime('%Y-%m-%d', date) AS date, flow, symptoms, mood, notes
      FROM cycle_logs WHERE user_id = $1 ORDER BY date ASC`,
     [tUserId]
   );

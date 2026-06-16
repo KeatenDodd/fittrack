@@ -45,7 +45,7 @@ async function upsertActivity(iUserId, sDay, iSteps, fCalories, sSource) {
        steps = COALESCE(EXCLUDED.steps, activity_logs.steps),
        calories_burned = COALESCE(EXCLUDED.calories_burned, activity_logs.calories_burned),
        source = EXCLUDED.source,
-       updated_at = now()
+       updated_at = datetime('now','localtime')
      RETURNING day, steps, calories_burned, source, updated_at`,
     [iUserId, sDay, iSteps, fCalories, sSource]
   );

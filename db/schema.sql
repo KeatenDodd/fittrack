@@ -144,6 +144,7 @@ CREATE TABLE session_exercises (
   target_rep_low INTEGER,
   target_rep_high INTEGER,
   target_weight  NUMERIC(7,2),
+  superset_group INTEGER,   -- exercises sharing a group are performed as a superset
   notes       TEXT
 );
 CREATE INDEX idx_session_exercises_sess ON session_exercises(session_id);
@@ -158,6 +159,7 @@ CREATE TABLE exercise_sets (
   rpe                 NUMERIC(3,1),   -- rate of perceived exertion (optional)
   is_completed        BOOLEAN     NOT NULL DEFAULT true,
   is_warmup           BOOLEAN     NOT NULL DEFAULT false,
+  set_type            VARCHAR(10) NOT NULL DEFAULT 'normal',  -- normal | warmup | myo | drop
   notes               TEXT,
   performed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

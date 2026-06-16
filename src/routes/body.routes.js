@@ -26,7 +26,7 @@ oRouter.post('/weight', wrap(async (tReq, tRes) => {
   if (!Number.isFinite(fWeight) || fWeight <= 0) throw httpError(400, 'Enter a valid weight');
   const oRow = await oDb.one(
     `INSERT INTO body_weight_logs (user_id, weight, unit, logged_at, notes)
-     VALUES ($1, $2, $3, COALESCE($4, now()), $5) RETURNING *`,
+     VALUES ($1, $2, $3, COALESCE($4, datetime('now','localtime')), $5) RETURNING *`,
     [tReq.iUserId, fWeight, tReq.body.unit || 'lb', tReq.body.loggedAt || null, tReq.body.notes || null]
   );
   tRes.status(201).json({ entry: oRow });
@@ -57,7 +57,7 @@ oRouter.get('/measurements', wrap(async (tReq, tRes) => {
     `SELECT m.id, m.measurement_type_id, t.name AS type_name, m.value, m.unit, m.logged_at, m.notes
      FROM body_measurement_logs m
      JOIN measurement_types t ON t.id = m.measurement_type_id
-     WHERE m.user_id = $1 AND ($2::int IS NULL OR m.measurement_type_id = $2)
+     WHERE m.user_id = $1 AND ($2 IS NULL OR m.measurement_type_id = $2)
      ORDER BY m.logged_at ASC`,
     [tReq.iUserId, iTypeId]
   );
@@ -70,7 +70,7 @@ oRouter.post('/measurements', wrap(async (tReq, tRes) => {
   if (!Number.isFinite(fValue)) throw httpError(400, 'Enter a valid measurement');
   const oRow = await oDb.one(
     `INSERT INTO body_measurement_logs (user_id, measurement_type_id, value, unit, logged_at, notes)
-     VALUES ($1, $2, $3, $4, COALESCE($5, now()), $6) RETURNING *`,
+     VALUES ($1, $2, $3, $4, COALESCE($5, datetime('now','localtime')), $6) RETURNING *`,
     [
       tReq.iUserId,
       tReq.body.measurementTypeId,

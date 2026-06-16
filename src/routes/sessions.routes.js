@@ -6,6 +6,13 @@ const { wrap, httpError } = require('../util');
 const { saveUpload, removeUpload } = require('../upload');
 
 const MAX_VIDEO = 250 * 1024 * 1024; // 250 MB per set clip
+const SET_TYPES = ['normal', 'warmup', 'myo', 'drop'];
+
+// Resolve a set's type from an explicit setType, falling back to legacy isWarmup.
+function normSetType(tSetType, tIsWarmup) {
+  if (SET_TYPES.includes(tSetType)) return tSetType;
+  return tIsWarmup ? 'warmup' : 'normal';
+}
 
 const oRouter = express.Router();
 oRouter.use(oAuth.requireAuth);
@@ -40,7 +47,7 @@ async function loadSession(tSessionId) {
   const oSession = await oDb.one('SELECT * FROM workout_sessions WHERE id = $1', [tSessionId]);
   if (!oSession) return null;
   const oExercises = await oDb.many(
-    `SELECT se.id, se.exercise_id, se.order_index, se.notes,
+    `SELECT se.id, se.exercise_id, se.order_index, se.notes, se.superset_group,
             se.target_sets, se.target_rep_low, se.target_rep_high, se.target_weight,
             e.name AS exercise_name, e.muscle_group, e.equipment, e.category
      FROM session_exercises se
@@ -51,7 +58,7 @@ async function loadSession(tSessionId) {
   );
   for (const oExercise of oExercises) {
     oExercise.sets = await oDb.many(
-      `SELECT id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, notes
+      `SELECT id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, set_type, notes
        FROM exercise_sets WHERE session_exercise_id = $1 ORDER BY set_number ASC, id ASC`,
       [oExercise.id]
     );
@@ -69,12 +76,12 @@ oRouter.get('/', wrap(async (tReq, tRes) => {
   const iLimit = Math.min(parseInt(tReq.query.limit || '50', 10), 200);
   const oSessions = await oDb.many(
     `SELECT s.*,
-            COUNT(DISTINCT se.id)::int AS exercise_count,
-            COUNT(st.id)::int AS set_count,
-            COALESCE(SUM(st.weight * st.reps), 0)::numeric AS total_volume
+            COUNT(DISTINCT se.id) AS exercise_count,
+            COUNT(st.id) AS set_count,
+            COALESCE(SUM(st.weight * st.reps), 0) AS total_volume
      FROM workout_sessions s
      LEFT JOIN session_exercises se ON se.session_id = s.id
-     LEFT JOIN exercise_sets st ON st.session_exercise_id = se.id AND st.is_warmup = false
+     LEFT JOIN exercise_sets st ON st.session_exercise_id = se.id AND st.is_warmup = 0
      WHERE s.user_id = $1
      GROUP BY s.id
      ORDER BY s.started_at DESC
@@ -92,8 +99,8 @@ oRouter.get('/calendar', wrap(async (tReq, tRes) => {
   const oRows = await oDb.many(
     `SELECT id, name, started_at, ended_at FROM workout_sessions
      WHERE user_id = $1
-       AND started_at >= ($2 || '-01')::date
-       AND started_at <  (($2 || '-01')::date + interval '1 month')
+       AND date(started_at) >= date($2 || '-01')
+       AND date(started_at) <  date($2 || '-01', '+1 month')
      ORDER BY started_at ASC`,
     [tReq.iUserId, sMonth]
   );
@@ -164,7 +171,7 @@ oRouter.post('/:id/finish', wrap(async (tReq, tRes) => {
   const oSession = await ownSession(tReq.params.id, tReq.iUserId);
   if (!oSession) throw httpError(404, 'Workout not found');
   const bWasEnded = !!oSession.ended_at;
-  await oDb.query('UPDATE workout_sessions SET ended_at = now() WHERE id = $1', [tReq.params.id]);
+  await oDb.query("UPDATE workout_sessions SET ended_at = datetime('now','localtime') WHERE id = $1", [tReq.params.id]);
 
   // Run program progression once, only on the first finish of a program workout.
   let oProgression = null;
@@ -207,6 +214,29 @@ oRouter.put('/exercises/:seId', wrap(async (tReq, tRes) => {
   tRes.json({ sessionExercise: oRow });
 }));
 
+// PUT /api/sessions/exercises/:seId/superset  -> link/unlink as a superset
+// body: { withSeId } to group with another exercise, or { unlink: true }
+oRouter.put('/exercises/:seId/superset', wrap(async (tReq, tRes) => {
+  const oSe = await ownSessionExercise(tReq.params.seId, tReq.iUserId);
+  if (!oSe) throw httpError(404, 'Not found');
+
+  if (tReq.body.unlink) {
+    await oDb.query('UPDATE session_exercises SET superset_group = NULL WHERE id = $1', [oSe.id]);
+    return tRes.json({ ok: true });
+  }
+
+  const oOther = await ownSessionExercise(tReq.body.withSeId, tReq.iUserId);
+  if (!oOther) throw httpError(404, 'Other exercise not found');
+  if (oOther.session_id !== oSe.session_id) throw httpError(400, 'Exercises are in different workouts');
+  if (oOther.id === oSe.id) throw httpError(400, 'Cannot superset an exercise with itself');
+
+  // reuse an existing group if either side already has one, else start a new one
+  const iGroup = oSe.superset_group || oOther.superset_group || oSe.id;
+  await oDb.query('UPDATE session_exercises SET superset_group = $1 WHERE id = $2 OR id = $3',
+    [iGroup, oSe.id, oOther.id]);
+  return tRes.json({ ok: true });
+}));
+
 // POST /api/sessions/exercises/:seId/media  -> attach a set video (raw body)
 oRouter.post('/exercises/:seId/media', wrap(async (tReq, tRes) => {
   if (!(await ownSessionExercise(tReq.params.seId, tReq.iUserId))) throw httpError(404, 'Not found');
@@ -217,6 +247,25 @@ oRouter.post('/exercises/:seId/media', wrap(async (tReq, tRes) => {
     [tReq.params.seId, oSaved.relPath, oSaved.mime]
   );
   tRes.status(201).json({ media: { id: oRow.id, mime: oRow.mime, url: '/uploads/' + oRow.file_path } });
+}));
+
+// PUT /api/sessions/media/:mediaId/move  -> reassign a clip to another exercise
+// (e.g. you filmed it on the wrong exercise). body: { toSeId }
+oRouter.put('/media/:mediaId/move', wrap(async (tReq, tRes) => {
+  const oMedia = await oDb.one(
+    `SELECT em.id, se.session_id FROM exercise_media em
+     JOIN session_exercises se ON se.id = em.session_exercise_id
+     JOIN workout_sessions s ON s.id = se.session_id
+     WHERE em.id = $1 AND s.user_id = $2`,
+    [tReq.params.mediaId, tReq.iUserId]
+  );
+  if (!oMedia) throw httpError(404, 'Clip not found');
+  const oTarget = await ownSessionExercise(tReq.body.toSeId, tReq.iUserId);
+  if (!oTarget) throw httpError(404, 'Target exercise not found');
+  if (oTarget.session_id !== oMedia.session_id) throw httpError(400, 'Pick an exercise in this workout');
+  await oDb.query('UPDATE exercise_media SET session_exercise_id = $1 WHERE id = $2',
+    [oTarget.id, oMedia.id]);
+  tRes.json({ ok: true });
 }));
 
 // DELETE /api/sessions/media/:mediaId
@@ -248,10 +297,11 @@ oRouter.post('/exercises/:seId/sets', wrap(async (tReq, tRes) => {
     'SELECT COALESCE(MAX(set_number) + 1, 1) AS next FROM exercise_sets WHERE session_exercise_id = $1',
     [tReq.params.seId]
   );
+  const sType = normSetType(tReq.body.setType, tReq.body.isWarmup);
   const oSet = await oDb.one(
     `INSERT INTO exercise_sets
-       (session_exercise_id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+       (session_exercise_id, set_number, weight, reps, rest_seconds, rpe, is_completed, is_warmup, set_type, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
     [
       tReq.params.seId,
       oNext.next,
@@ -260,7 +310,8 @@ oRouter.post('/exercises/:seId/sets', wrap(async (tReq, tRes) => {
       tReq.body.restSeconds ?? null,
       tReq.body.rpe ?? null,
       tReq.body.isCompleted ?? true,
-      tReq.body.isWarmup ?? false,
+      sType === 'warmup',
+      sType,
       tReq.body.notes || null,
     ]
   );
@@ -270,18 +321,20 @@ oRouter.post('/exercises/:seId/sets', wrap(async (tReq, tRes) => {
 // PUT /api/sessions/sets/:setId
 oRouter.put('/sets/:setId', wrap(async (tReq, tRes) => {
   if (!(await ownSet(tReq.params.setId, tReq.iUserId))) throw httpError(404, 'Set not found');
+  const sType = normSetType(tReq.body.setType, tReq.body.isWarmup);
   const oSet = await oDb.one(
     `UPDATE exercise_sets SET
        weight = $1, reps = $2, rest_seconds = $3, rpe = $4,
-       is_completed = $5, is_warmup = $6, notes = $7
-     WHERE id = $8 RETURNING *`,
+       is_completed = $5, is_warmup = $6, set_type = $7, notes = $8
+     WHERE id = $9 RETURNING *`,
     [
       tReq.body.weight ?? null,
       tReq.body.reps ?? null,
       tReq.body.restSeconds ?? null,
       tReq.body.rpe ?? null,
       tReq.body.isCompleted ?? true,
-      tReq.body.isWarmup ?? false,
+      sType === 'warmup',
+      sType,
       tReq.body.notes || null,
       tReq.params.setId,
     ]
