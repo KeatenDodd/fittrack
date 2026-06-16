@@ -2,10 +2,10 @@
 // Thin wrappers over Chart.js (loaded globally from CDN in index.html).
 // Shared spartan styling: hairline grid, ink line, monospace tick labels.
 
-const sInk = '#17171a';
-const sAccent = '#1f6f54';
-const sLine = '#e7e7e3';
-const sMuted = '#9a9aa0';
+const sInk = '#2b2118';
+const sAccent = '#876a37';
+const sLine = '#d8c39a';
+const sMuted = '#a08b67';
 const sMono = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
 function baseOptions(tExtra) {
@@ -37,7 +37,7 @@ function draw(tCanvas, tConfig) {
   return oChart;
 }
 
-const sDanger = '#b23b3b';
+const sDanger = '#8c2f20';
 
 // Single ink line chart over labelled points.
 // oOpts.notes: optional array aligned to tData; points with a note are drawn as
