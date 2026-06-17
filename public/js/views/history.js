@@ -73,11 +73,15 @@ function calendarCard(oData, tCtx, tOnNav) {
     const aSessions = oByDay[d];
     const bHas = !!aSessions;
     const sClass = 'div.cal-day' + (bHas ? '.has' : '') + (bThisMonth && d === iToday ? '.today' : '');
+    // align the hover preview so it doesn't spill past the calendar edges
+    const iCol = (iFirstWeekday + d - 1) % 7;
+    const sPopAlign = iCol <= 1 ? '.pop-left' : (iCol >= 5 ? '.pop-right' : '');
     aCells.push(h(sClass, {
       onclick: bHas ? () => openDay(aSessions, tCtx) : null,
     }, [
       h('span.cal-n', { text: String(d) }),
       bHas ? h('span.cal-dot') : null,
+      bHas ? dayPreview(aSessions, sPopAlign) : null,
     ]));
   }
 
@@ -94,6 +98,25 @@ function calendarCard(oData, tCtx, tOnNav) {
     h('div.cal-grid', {}, DOW.map((s) => h('div.cal-dow', { text: s }))),
     h('div.cal-grid', {}, aCells),
   ]);
+}
+
+// Hover preview (desktop): a synopsis of the day's workout(s) shown before you
+// click in. Pointer-events are disabled so it never blocks the tap/click.
+function dayPreview(aSessions, sAlign) {
+  function sessionBlock(oS) {
+    const sTime = new Date(oS.started_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const aEx = oS.exercises || [];
+    const aShown = aEx.slice(0, 5);
+    const iMore = aEx.length - aShown.length;
+    return h('div.cal-pop-sess', {}, [
+      h('div.cal-pop-title', { text: oS.name || 'Workout' }),
+      h('div.cal-pop-meta', { text: sTime + ' · ' + (oS.exercise_count || aEx.length) + ' ex · '
+        + (oS.set_count || 0) + ' sets · ' + num(oS.total_volume || 0) + ' lb' }),
+      aShown.length ? h('ul.cal-pop-ex', {}, aShown.map((sN) => h('li', { text: sN }))) : null,
+      iMore > 0 ? h('div.cal-pop-more', { text: '+ ' + iMore + ' more' }) : null,
+    ]);
+  }
+  return h('div.cal-pop' + (sAlign || ''), {}, aSessions.map(sessionBlock));
 }
 
 // Tapping a day: one workout -> straight there; several -> pick one.

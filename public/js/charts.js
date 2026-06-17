@@ -9,7 +9,8 @@ const sMuted = '#a08b67';
 const sMono = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
 function baseOptions(tExtra) {
-  return Object.assign({
+  const oExtra = tExtra || {};
+  const oBase = {
     responsive: true,
     maintainAspectRatio: false,
     animation: { duration: 280 },
@@ -23,7 +24,16 @@ function baseOptions(tExtra) {
       y: { grid: { color: sLine, drawTicks: false }, border: { display: false },
            ticks: { color: sMuted, font: { family: sMono, size: 10 }, maxTicksLimit: 5 } },
     },
-  }, tExtra || {});
+  };
+  const oOut = Object.assign({}, oBase, oExtra);
+  // Deep-merge `plugins` so a caller adding tooltip callbacks doesn't blow away
+  // the defaults (notably legend.display:false — otherwise an unlabeled dataset
+  // shows a stray "undefined" legend key).
+  oOut.plugins = Object.assign({}, oBase.plugins, oExtra.plugins);
+  if (oExtra.plugins && oExtra.plugins.tooltip) {
+    oOut.plugins.tooltip = Object.assign({}, oBase.plugins.tooltip, oExtra.plugins.tooltip);
+  }
+  return oOut;
 }
 
 const oCharts = new WeakMap();

@@ -92,18 +92,34 @@ oRouter.get('/', wrap(async (tReq, tRes) => {
 }));
 
 // GET /api/sessions/calendar?month=YYYY-MM  -> sessions in a month, for the
-// workout calendar. Lightweight: just id, name and timestamps.
+// workout calendar. Includes a light synopsis (counts, volume, exercise names)
+// so the calendar can show a hover preview without opening each workout.
 oRouter.get('/calendar', wrap(async (tReq, tRes) => {
   const sMonth = /^\d{4}-\d{2}$/.test(String(tReq.query.month || ''))
     ? tReq.query.month : new Date().toISOString().slice(0, 7);
   const oRows = await oDb.many(
-    `SELECT id, name, started_at, ended_at FROM workout_sessions
-     WHERE user_id = $1
-       AND date(started_at) >= date($2 || '-01')
-       AND date(started_at) <  date($2 || '-01', '+1 month')
-     ORDER BY started_at ASC`,
+    `SELECT s.id, s.name, s.started_at, s.ended_at,
+            COUNT(DISTINCT se.id) AS exercise_count,
+            COUNT(st.id) AS set_count,
+            COALESCE(SUM(st.weight * st.reps), 0) AS total_volume,
+            (SELECT group_concat(nm, '|') FROM (
+               SELECT e.name AS nm FROM session_exercises se2
+               JOIN exercises e ON e.id = se2.exercise_id
+               WHERE se2.session_id = s.id
+               ORDER BY se2.order_index ASC, se2.id ASC)) AS exercises
+     FROM workout_sessions s
+     LEFT JOIN session_exercises se ON se.session_id = s.id
+     LEFT JOIN exercise_sets st ON st.session_exercise_id = se.id AND st.is_warmup = 0
+     WHERE s.user_id = $1
+       AND date(s.started_at) >= date($2 || '-01')
+       AND date(s.started_at) <  date($2 || '-01', '+1 month')
+     GROUP BY s.id
+     ORDER BY s.started_at ASC`,
     [tReq.iUserId, sMonth]
   );
+  for (const oRow of oRows) {
+    oRow.exercises = oRow.exercises ? String(oRow.exercises).split('|') : [];
+  }
   tRes.json({ month: sMonth, sessions: oRows });
 }));
 

@@ -42,11 +42,18 @@ async function paintWeight(tRoot) {
 
   const oWeight = h('input.num', { type: 'number', inputmode: 'decimal', step: 'any', placeholder: 'weight' });
   const oUnit = h('select', {}, [h('option', { value: 'lb', text: 'lb' }), h('option', { value: 'kg', text: 'kg' })]);
+  // Date defaults to today, but can be backdated to import historical weigh-ins.
+  const oDate = h('input', { type: 'date', value: todayISO(), max: todayISO() });
 
   async function add() {
     if (oWeight.value === '') { toast('Enter a weight'); return; }
-    await guard(api.addWeight({ weight: Number(oWeight.value), unit: oUnit.value }));
-    toast('Logged'); render2();
+    const sDate = oDate.value || todayISO();
+    // For today keep the real time (so multiple weigh-ins order correctly);
+    // for a past date, anchor at noon so date bucketing is timezone-safe.
+    const oBody = { weight: Number(oWeight.value), unit: oUnit.value };
+    if (sDate !== todayISO()) oBody.loggedAt = sDate + ' 12:00:00';
+    await guard(api.addWeight(oBody));
+    toast(sDate === todayISO() ? 'Logged' : 'Logged for ' + fmtDate(sDate + 'T12:00:00')); render2();
   }
   function render2() { paintWeight(tRoot); }
 
@@ -59,6 +66,9 @@ async function paintWeight(tRoot) {
         h('div', { style: 'flex:2' }, [oWeight]),
         h('div', { style: 'flex:1' }, [oUnit]),
         h('button.btn', { type: 'button', text: 'Log', onclick: add, style: 'flex:0 0 auto' }),
+      ]),
+      h('label.field', { style: 'margin-top:8px;margin-bottom:0' }, [
+        h('span.lbl', { text: 'Date' }), oDate,
       ]),
     ]),
     oLatest ? h('div.stat-grid', {}, [
