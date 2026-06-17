@@ -271,6 +271,27 @@ CREATE TABLE nutrition_goals (
   UNIQUE (user_id, nutrient_id)
 );
 
+-- Recipes: a named set of ingredients that rolls up into a derived `food`
+-- (source='recipe', referenced by food_id) so it logs like any other food.
+CREATE TABLE recipes (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  food_id    INTEGER     REFERENCES foods(id) ON DELETE SET NULL,
+  name       VARCHAR(150) NOT NULL,
+  servings   NUMERIC(6,2) NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_recipes_user ON recipes(user_id);
+
+CREATE TABLE recipe_ingredients (
+  id          SERIAL PRIMARY KEY,
+  recipe_id   INTEGER     NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  food_id     INTEGER     NOT NULL REFERENCES foods(id),
+  grams       NUMERIC(8,2) NOT NULL,
+  order_index INTEGER     NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_recipe_ing ON recipe_ingredients(recipe_id);
+
 -- ----------------------------------------------------------------------------
 --  Menstrual cycle tracking (shown only for profiles with sex = 'female')
 --  One row per logged day; period starts / predictions are derived from these.

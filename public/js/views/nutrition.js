@@ -1,6 +1,7 @@
 'use strict';
 import { api } from '../api.js';
 import { h, mount, num, toast, openSheet, confirmAction, guard, todayISO } from '../ui.js';
+import { nutrientCatalog, factsList } from './foodfacts.js';
 
 const MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 const MACROS = [
@@ -87,6 +88,7 @@ export async function render(tRoot, tArgs, tCtx) {
       h('div.page-head', { style: 'display:flex;justify-content:space-between;align-items:center' }, [
         h('div', {}, [h('div.eyebrow', { text: 'Nutrition' }), h('h1', { text: prettyDate(sDate) })]),
         h('div.btn-row', {}, [
+          h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '🍲 Recipes', onclick: () => tCtx.navigate('/recipes') }),
           h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '‹', onclick: () => { sDate = shiftDate(sDate, -1); isMicroOpen = false; paint(); } }),
           h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '›', onclick: () => { sDate = shiftDate(sDate, 1); isMicroOpen = false; paint(); } }),
         ]),
@@ -203,6 +205,7 @@ function openAddFood(sMeal, sDate, tOnDone) {
       const oResults = h('div', { style: 'max-height:42vh;overflow-y:auto' });
       const oActions = h('div.btn-row', { style: 'margin:12px 0' }, [
         h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '📷 Scan barcode', onclick: goScanner }),
+        h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '🍲 Recipes', onclick: goRecipes }),
         h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '+ Custom food', onclick: goCustom }),
       ]);
       let oTimer = null;
@@ -284,6 +287,31 @@ function openAddFood(sMeal, sDate, tOnDone) {
       } else {
         setTimeout(() => oManual.focus(), 50);
       }
+    }
+
+    // step: pick one of the user's recipes to log (its derived food)
+    function goRecipes() {
+      stopScanner();
+      const oList = h('div', { style: 'max-height:48vh;overflow-y:auto' }, [h('p.muted', { style: 'padding:10px 4px', text: 'Loading…' })]);
+      mount(tBody, [backBtn(), oList]);
+      api.recipes().then((oData) => {
+        const aRecipes = oData.recipes || [];
+        if (!aRecipes.length) {
+          mount(oList, h('p.muted', { style: 'padding:10px 4px' }, [
+            'No recipes yet. ', h('a', { href: '#/recipes', text: 'Create one', style: 'color:var(--accent)' }), '.']));
+          return;
+        }
+        mount(oList, aRecipes.map((oR) => {
+          const oPS = oR.perServing || {};
+          return h('div.result', { onclick: async () => {
+            const oD = await guard(api.food(oR.foodId)); goQuantity(oD.food);
+          } }, [
+            h('div', {}, [h('div.nm', { text: oR.name }),
+              h('div.br', { text: num(oPS.energy_kcal || 0) + ' kcal · ' + num(oR.servings) + (Number(oR.servings) === 1 ? ' serving' : ' servings') })]),
+            h('div.src', { text: 'recipe' }),
+          ]);
+        }));
+      }).catch(() => mount(oList, h('p.muted', { style: 'padding:10px 4px', text: 'Could not load recipes.' })));
     }
 
     // step: enter a custom food, then go to quantity
@@ -402,12 +430,35 @@ function renderQuantity(tFood, sMeal, sDate, tClose, tOnDone, tBack) {
     h('div.card', { style: 'margin-bottom:14px' }, [
       h('div.faint', { style: 'font-size:12px;margin-bottom:2px', text: 'In this amount' }),
       oFacts,
+      fullFacts(tFood, oQty),
     ]),
     h('button.btn.btn-block', { type: 'button', text: 'Log food', onclick: log }),
   ]);
 }
 
-function normalizeFood(tFood) {
+// "Dive deeper" — an expander showing every macro + micro for the current
+// amount, recomputed from the per-100 nutrients via the nutrient catalog.
+function fullFacts(tFood, oQty) {
+  const oWrap = h('div', { style: 'margin-top:8px' });
+  let bOpen = false;
+  let oCatalog = null;
+  const oBtn = h('button', { type: 'button', text: 'Show full nutrition facts',
+    style: 'background:none;border:0;color:var(--accent);cursor:pointer;padding:0;font-size:13px',
+    onclick: async () => {
+      bOpen = !bOpen;
+      oBtn.textContent = bOpen ? 'Hide full nutrition facts' : 'Show full nutrition facts';
+      if (!bOpen) { mount(oWrap, null); return; }
+      if (!oCatalog) oCatalog = await nutrientCatalog();
+      mount(oWrap, factsList(tFood, Number(oQty.value) || 0, oCatalog));
+    } });
+  // keep the open breakdown in sync as the amount changes
+  oQty.addEventListener('input', () => {
+    if (bOpen && oCatalog) mount(oWrap, factsList(tFood, Number(oQty.value) || 0, oCatalog));
+  });
+  return h('div', {}, [oBtn, oWrap]);
+}
+
+export function normalizeFood(tFood) {
   return {
     name: tFood.name, brand: tFood.brand || null, barcode: tFood.barcode || null,
     source: tFood.source || 'off', sourceRef: tFood.sourceRef || tFood.barcode || null,

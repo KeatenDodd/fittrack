@@ -11,6 +11,7 @@ import * as viewTemplates from './views/templates.js';
 import * as viewHistory from './views/history.js';
 import * as viewBody from './views/body.js';
 import * as viewNutrition from './views/nutrition.js';
+import * as viewRecipes from './views/recipes.js';
 import * as viewProgress from './views/progress.js';
 import * as viewImport from './views/import.js';
 import * as viewActivity from './views/activity.js';
@@ -32,6 +33,7 @@ const oRoutes = {
   activity:  { label: 'Activity', icon: '', view: viewActivity, nav: false },
   settings:  { label: 'Settings', icon: '', view: viewSettings, nav: false },
   cycle:     { label: 'Cycle', icon: '', view: viewCycle, nav: false },
+  recipes:   { label: 'Recipes', icon: '', view: viewRecipes, nav: false },
 };
 
 function currentRoute() {
@@ -110,7 +112,8 @@ async function route() {
   // A live workout / template editor belongs to the Program tab; other non-tab
   // pages (History, Cycle, Settings, …) are header links and highlight no tab.
   renderNav(oRoutes[sKey] && oRoutes[sKey].nav ? sKey
-    : (['workout', 'templates'].includes(sKey) ? 'program' : sKey));
+    : (['workout', 'templates'].includes(sKey) ? 'program'
+      : (sKey === 'recipes' ? 'nutrition' : sKey)));
 
   clear(oView);
   try {

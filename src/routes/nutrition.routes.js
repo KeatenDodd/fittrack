@@ -141,6 +141,184 @@ async function loadFood(tFoodId) {
   return oFood;
 }
 
+// --- recipes ------------------------------------------------------------------
+// A recipe rolls its ingredients up into a derived "food" (source='recipe') so
+// that logging, daily summaries and the facts breakdown all flow through the
+// existing food machinery. The recipe + ingredient rows let us re-edit it and
+// show the per-ingredient contribution; the derived food carries the totals.
+
+// Sum every nutrient across ingredients (each amount is per-100 of that food).
+async function recipeTotals(aIngredients) {
+  const oTotals = {};
+  let fWeight = 0;
+  for (const oIng of aIngredients) {
+    const fGrams = Number(oIng.grams) || 0;
+    fWeight += fGrams;
+    const aRows = await oDb.many(
+      `SELECT n.key, fn.amount FROM food_nutrients fn
+       JOIN nutrients n ON n.id = fn.nutrient_id WHERE fn.food_id = $1`,
+      [oIng.food_id]
+    );
+    for (const oRow of aRows) {
+      oTotals[oRow.key] = (oTotals[oRow.key] || 0) + Number(oRow.amount) * fGrams / 100;
+    }
+  }
+  return { totals: oTotals, weight: fWeight };
+}
+
+// Recompute the derived food for a recipe from its current ingredients.
+async function syncRecipeFood(iRecipeId, sName, fServings, aIngredients, iUserId) {
+  const { totals, weight } = await recipeTotals(aIngredients);
+  const oPer100 = {};
+  if (weight > 0) {
+    for (const sKey of Object.keys(totals)) oPer100[sKey] = totals[sKey] / weight * 100;
+  }
+  const fServingGrams = fServings > 0 ? weight / fServings : weight;
+  const iFoodId = await upsertFood({
+    name: sName,
+    source: 'recipe',
+    sourceRef: 'recipe:' + iRecipeId,
+    baseUnit: 'g',
+    servingSize: Math.round(fServingGrams * 100) / 100,
+    servingDesc: '1 serving',
+    nutrients: oPer100,
+  }, iUserId);
+  await oDb.query('UPDATE recipes SET food_id = $1 WHERE id = $2', [iFoodId, iRecipeId]);
+  return { foodId: iFoodId, weight, servingGrams: fServingGrams, totals };
+}
+
+function cleanIngredients(aRaw) {
+  return (Array.isArray(aRaw) ? aRaw : [])
+    .map((oI) => ({ food_id: Number(oI.foodId ?? oI.food_id), grams: Number(oI.grams) }))
+    .filter((oI) => Number.isFinite(oI.food_id) && Number.isFinite(oI.grams) && oI.grams > 0);
+}
+
+async function saveIngredients(iRecipeId, aIngredients) {
+  await oDb.query('DELETE FROM recipe_ingredients WHERE recipe_id = $1', [iRecipeId]);
+  let iOrder = 0;
+  for (const oIng of aIngredients) {
+    await oDb.query(
+      `INSERT INTO recipe_ingredients (recipe_id, food_id, grams, order_index)
+       VALUES ($1, $2, $3, $4)`,
+      [iRecipeId, oIng.food_id, oIng.grams, iOrder++]
+    );
+  }
+}
+
+// Per-serving macro snapshot for recipe list rows (energy + the three macros).
+async function recipeMacros(iFoodId) {
+  if (!iFoodId) return {};
+  const oFood = await oDb.one('SELECT serving_size FROM foods WHERE id = $1', [iFoodId]);
+  const fServ = oFood && oFood.serving_size ? Number(oFood.serving_size) : 0;
+  const aRows = await oDb.many(
+    `SELECT n.key, fn.amount FROM food_nutrients fn
+     JOIN nutrients n ON n.id = fn.nutrient_id
+     WHERE fn.food_id = $1 AND n.key IN ('energy_kcal','protein_g','carbs_g','fat_g')`,
+    [iFoodId]
+  );
+  const oOut = {};
+  for (const oRow of aRows) oOut[oRow.key] = Number(oRow.amount) * fServ / 100;
+  return oOut;
+}
+
+// GET /api/nutrition/recipes
+oRouter.get('/recipes', wrap(async (tReq, tRes) => {
+  const aRecipes = await oDb.many(
+    'SELECT id, name, servings, food_id FROM recipes WHERE user_id = $1 ORDER BY lower(name) ASC',
+    [tReq.iUserId]
+  );
+  for (const oR of aRecipes) {
+    oR.servings = Number(oR.servings);
+    oR.foodId = oR.food_id;
+    oR.perServing = await recipeMacros(oR.food_id);
+    delete oR.food_id;
+  }
+  tRes.json({ recipes: aRecipes });
+}));
+
+// GET /api/nutrition/recipes/:id  -> full recipe with per-ingredient breakdown
+oRouter.get('/recipes/:id', wrap(async (tReq, tRes) => {
+  const oR = await oDb.one(
+    'SELECT * FROM recipes WHERE id = $1 AND user_id = $2',
+    [tReq.params.id, tReq.iUserId]
+  );
+  if (!oR) throw httpError(404, 'Recipe not found');
+  const aIng = await oDb.many(
+    `SELECT ri.id, ri.food_id, ri.grams, f.name, f.brand
+     FROM recipe_ingredients ri JOIN foods f ON f.id = ri.food_id
+     WHERE ri.recipe_id = $1 ORDER BY ri.order_index ASC, ri.id ASC`,
+    [oR.id]
+  );
+  for (const oIng of aIng) {
+    oIng.grams = Number(oIng.grams);
+    oIng.foodId = oIng.food_id;
+    const aRows = await oDb.many(
+      `SELECT n.key, fn.amount FROM food_nutrients fn
+       JOIN nutrients n ON n.id = fn.nutrient_id WHERE fn.food_id = $1`,
+      [oIng.food_id]
+    );
+    oIng.nutrients = {};
+    for (const oRow of aRows) oIng.nutrients[oRow.key] = Number(oRow.amount) * oIng.grams / 100;
+    delete oIng.food_id;
+  }
+  const { totals, weight } = await recipeTotals(aIng.map((i) => ({ food_id: i.foodId, grams: i.grams })));
+  const fServings = Number(oR.servings) || 1;
+  tRes.json({
+    recipe: {
+      id: oR.id, name: oR.name, servings: fServings, foodId: oR.food_id,
+      ingredients: aIng, totals, weight,
+      servingGrams: fServings > 0 ? weight / fServings : weight,
+    },
+  });
+}));
+
+// POST /api/nutrition/recipes  body: { name, servings, ingredients:[{foodId, grams}] }
+oRouter.post('/recipes', wrap(async (tReq, tRes) => {
+  const sName = String(tReq.body.name || '').trim();
+  if (!sName) throw httpError(400, 'Recipe name is required');
+  const fServings = Number(tReq.body.servings) || 1;
+  const aIng = cleanIngredients(tReq.body.ingredients);
+  if (!aIng.length) throw httpError(400, 'Add at least one ingredient');
+
+  const oRow = await oDb.one(
+    'INSERT INTO recipes (user_id, name, servings) VALUES ($1, $2, $3) RETURNING id',
+    [tReq.iUserId, sName, fServings]
+  );
+  await saveIngredients(oRow.id, aIng);
+  await syncRecipeFood(oRow.id, sName, fServings, aIng, tReq.iUserId);
+  tRes.status(201).json({ id: oRow.id });
+}));
+
+// PUT /api/nutrition/recipes/:id
+oRouter.put('/recipes/:id', wrap(async (tReq, tRes) => {
+  const oR = await oDb.one(
+    'SELECT id FROM recipes WHERE id = $1 AND user_id = $2',
+    [tReq.params.id, tReq.iUserId]
+  );
+  if (!oR) throw httpError(404, 'Recipe not found');
+  const sName = String(tReq.body.name || '').trim();
+  if (!sName) throw httpError(400, 'Recipe name is required');
+  const fServings = Number(tReq.body.servings) || 1;
+  const aIng = cleanIngredients(tReq.body.ingredients);
+  if (!aIng.length) throw httpError(400, 'Add at least one ingredient');
+
+  await oDb.query('UPDATE recipes SET name = $1, servings = $2 WHERE id = $3',
+    [sName, fServings, oR.id]);
+  await saveIngredients(oR.id, aIng);
+  await syncRecipeFood(oR.id, sName, fServings, aIng, tReq.iUserId);
+  tRes.json({ id: oR.id });
+}));
+
+// DELETE /api/nutrition/recipes/:id  (leaves the derived food so past logs survive)
+oRouter.delete('/recipes/:id', wrap(async (tReq, tRes) => {
+  const oRow = await oDb.one(
+    'DELETE FROM recipes WHERE id = $1 AND user_id = $2 RETURNING id',
+    [tReq.params.id, tReq.iUserId]
+  );
+  if (!oRow) throw httpError(404, 'Recipe not found');
+  tRes.json({ ok: true });
+}));
+
 // --- nutrient catalog ---------------------------------------------------------
 oRouter.get('/nutrients', wrap(async (tReq, tRes) => {
   const oNutrients = await oDb.many('SELECT * FROM nutrients ORDER BY sort_order ASC', []);

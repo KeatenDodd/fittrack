@@ -151,6 +151,11 @@ export const api = {
   trend: (tFrom, tTo) => get('/nutrition/trend?from=' + (tFrom || '') + '&to=' + (tTo || '')),
   goals: () => get('/nutrition/goals'),
   setGoals: (tGoals) => put('/nutrition/goals', { goals: tGoals }),
+  recipes: () => get('/nutrition/recipes'),
+  recipe: (tId) => get('/nutrition/recipes/' + tId),
+  createRecipe: (tBody) => post('/nutrition/recipes', tBody),
+  updateRecipe: (tId, tBody) => put('/nutrition/recipes/' + tId, tBody),
+  deleteRecipe: (tId) => del('/nutrition/recipes/' + tId),
 
   // stats
   exercisesWithHistory: () => get('/stats/exercises'),

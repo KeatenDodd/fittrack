@@ -16,6 +16,30 @@ oSqlite.exec('PRAGMA foreign_keys = ON');
 
 ensureSchema();
 ensureColumns();
+ensureTables();
+
+// Tables introduced after first release (idempotent via IF NOT EXISTS).
+function ensureTables() {
+  oSqlite.exec(
+    "CREATE TABLE IF NOT EXISTS recipes ("
+    + " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    + " user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+    + " food_id INTEGER REFERENCES foods(id) ON DELETE SET NULL,"
+    + " name TEXT NOT NULL,"
+    + " servings NUMERIC NOT NULL DEFAULT 1,"
+    + " created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))"
+    + ");"
+    + "CREATE TABLE IF NOT EXISTS recipe_ingredients ("
+    + " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    + " recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,"
+    + " food_id INTEGER NOT NULL REFERENCES foods(id),"
+    + " grams NUMERIC NOT NULL,"
+    + " order_index INTEGER NOT NULL DEFAULT 0"
+    + ");"
+    + "CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id);"
+    + "CREATE INDEX IF NOT EXISTS idx_recipe_ing ON recipe_ingredients(recipe_id);"
+  );
+}
 
 // Add columns introduced after a database was first created (SQLite has no
 // "ADD COLUMN IF NOT EXISTS", so we check PRAGMA table_info first). Idempotent.
