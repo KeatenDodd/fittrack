@@ -319,6 +319,147 @@ oRouter.delete('/recipes/:id', wrap(async (tReq, tRes) => {
   tRes.json({ ok: true });
 }));
 
+// --- import a recipe from a URL ----------------------------------------------
+// Most recipe sites embed schema.org Recipe JSON-LD (for Google rich results).
+// We fetch the page, pull that structured data out and return name, servings,
+// the ingredient lines (with grams parsed where the unit is a mass), and the
+// site's per-serving nutrition if present. The user then matches each line to a
+// food in the builder — that's where our accurate per-ingredient macros come from.
+
+const MASS_TO_G = { g: 1, gram: 1, grams: 1, gr: 1, kg: 1000, kilogram: 1000, kilograms: 1000,
+  oz: 28.3495, ounce: 28.3495, ounces: 28.3495, lb: 453.592, lbs: 453.592, pound: 453.592, pounds: 453.592 };
+
+function parseQty(sTok) {
+  // "1 1/2" | "1/2" | "2" | "0.5"
+  const oMixed = sTok.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+  if (oMixed) return Number(oMixed[1]) + Number(oMixed[2]) / Number(oMixed[3]);
+  const oFrac = sTok.match(/^(\d+)\/(\d+)$/);
+  if (oFrac) return Number(oFrac[1]) / Number(oFrac[2]);
+  const f = Number(sTok);
+  return Number.isFinite(f) ? f : null;
+}
+
+function parseIngredientLine(sRaw) {
+  let s = String(sRaw || '').trim()
+    .replace(/¼/g, ' 1/4').replace(/½/g, ' 1/2').replace(/¾/g, ' 3/4')
+    .replace(/⅓/g, ' 1/3').replace(/⅔/g, ' 2/3').replace(/⅛/g, ' 1/8')
+    .replace(/\s+/g, ' ').trim();
+  let qty = null; let sUnit = null; let sName = s;
+  const oM = s.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*([a-zA-Z]+)?\.?\s*(.*)$/);
+  if (oM) {
+    qty = parseQty(oM[1]);
+    const sTok = (oM[2] || '').toLowerCase();
+    if (sTok && (MASS_TO_G[sTok] != null || ['ml','milliliter','milliliters','l','liter','liters','cup','cups','tbsp','tbsps','tablespoon','tablespoons','tsp','tsps','teaspoon','teaspoons','clove','cloves','can','cans','slice','slices','pinch','stick','sticks'].includes(sTok))) {
+      sUnit = sTok; sName = oM[3] || '';
+    } else {
+      // the token belongs to the name (e.g. "2 eggs", "3 large onions")
+      sName = ((oM[2] || '') + ' ' + (oM[3] || '')).trim();
+    }
+  }
+  // tidy the name: drop a leading parenthetical and trailing prep notes
+  sName = sName.replace(/^\([^)]*\)\s*/, '').replace(/,\s*(chopped|diced|minced|sliced|grated|melted|softened|to taste|optional).*$/i, '').trim();
+  const fGrams = (qty != null && sUnit && MASS_TO_G[sUnit] != null) ? Math.round(qty * MASS_TO_G[sUnit] * 10) / 10 : null;
+  return { raw: String(sRaw).trim(), name: sName || String(sRaw).trim(), qty, unit: sUnit, grams: fGrams };
+}
+
+function numFrom(tVal) {
+  if (tVal == null) return null;
+  const oM = String(tVal).replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+  return oM ? Number(oM[0]) : null;
+}
+
+function parseServings(tYield) {
+  let sY = tYield;
+  if (Array.isArray(tYield)) sY = tYield.find((x) => /\d/.test(String(x))) || tYield[0];
+  const n = numFrom(sY);
+  return n && n > 0 ? Math.round(n) : 1;
+}
+
+function mapNutrition(oN) {
+  if (!oN || typeof oN !== 'object') return {};
+  const oOut = {};
+  const set = (sKey, tRaw, fMult) => { const n = numFrom(tRaw); if (n != null) oOut[sKey] = n * (fMult || 1); };
+  set('energy_kcal', oN.calories, 1);
+  set('protein_g', oN.proteinContent, 1);
+  set('carbs_g', oN.carbohydrateContent, 1);
+  set('fat_g', oN.fatContent, 1);
+  set('fiber_g', oN.fiberContent, 1);
+  set('sugar_g', oN.sugarContent, 1);
+  set('sat_fat_g', oN.saturatedFatContent, 1);
+  set('cholesterol_mg', oN.cholesterolContent, 1);
+  // sodium often comes in grams; convert if the string says g (not mg)
+  if (oN.sodiumContent != null) {
+    const n = numFrom(oN.sodiumContent);
+    if (n != null) oOut.sodium_mg = /\bmg\b/i.test(String(oN.sodiumContent)) ? n : n * (n < 5 ? 1000 : 1);
+  }
+  return oOut;
+}
+
+// Walk arbitrary JSON-LD (object / array / @graph) to find a Recipe node.
+function findRecipeNode(tData) {
+  const aFound = [];
+  const visit = (o) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach(visit); return; }
+    const tType = o['@type'];
+    const bRecipe = tType === 'Recipe' || (Array.isArray(tType) && tType.includes('Recipe'));
+    if (bRecipe && Array.isArray(o.recipeIngredient || o.ingredients)) aFound.push(o);
+    if (Array.isArray(o['@graph'])) o['@graph'].forEach(visit);
+  };
+  visit(tData);
+  return aFound[0] || null;
+}
+
+function extractRecipe(sHtml) {
+  const oRe = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let oMatch;
+  while ((oMatch = oRe.exec(sHtml)) !== null) {
+    let oData;
+    try { oData = JSON.parse(oMatch[1].trim()); } catch (tErr) { continue; }
+    const oNode = findRecipeNode(oData);
+    if (oNode) return oNode;
+  }
+  return null;
+}
+
+// POST /api/nutrition/recipes/import  body: { url }
+oRouter.post('/recipes/import', wrap(async (tReq, tRes) => {
+  let oUrl;
+  try { oUrl = new URL(String(tReq.body.url || '').trim()); } catch (tErr) { throw httpError(400, 'Enter a valid URL'); }
+  if (!/^https?:$/.test(oUrl.protocol)) throw httpError(400, 'Only http(s) links are supported');
+  if (/^(localhost|127\.|0\.0\.0\.0|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(oUrl.hostname)) {
+    throw httpError(400, 'That address is not allowed');
+  }
+
+  let sHtml;
+  try {
+    const oRes = await fetch(oUrl.href, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FitTrack/1.0; +recipe-import)', Accept: 'text/html' },
+      redirect: 'follow',
+    });
+    if (!oRes.ok) throw httpError(502, 'Could not load that page (' + oRes.status + ')');
+    sHtml = await oRes.text();
+  } catch (tErr) {
+    if (tErr.statusCode) throw tErr;
+    throw httpError(502, 'Could not reach that website');
+  }
+
+  const oNode = extractRecipe(sHtml);
+  if (!oNode) throw httpError(422, 'No recipe data found on that page. Try a different recipe URL.');
+
+  const aRawIng = oNode.recipeIngredient || oNode.ingredients || [];
+  const aLines = aRawIng.map(parseIngredientLine);
+  tRes.json({
+    recipe: {
+      name: typeof oNode.name === 'string' ? oNode.name.trim() : 'Imported recipe',
+      servings: parseServings(oNode.recipeYield),
+      sourceUrl: oUrl.href,
+      ingredientLines: aLines,
+      nutrition: mapNutrition(oNode.nutrition),
+    },
+  });
+}));
+
 // --- nutrient catalog ---------------------------------------------------------
 oRouter.get('/nutrients', wrap(async (tReq, tRes) => {
   const oNutrients = await oDb.many('SELECT * FROM nutrients ORDER BY sort_order ASC', []);

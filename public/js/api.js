@@ -153,6 +153,7 @@ export const api = {
   setGoals: (tGoals) => put('/nutrition/goals', { goals: tGoals }),
   recipes: () => get('/nutrition/recipes'),
   recipe: (tId) => get('/nutrition/recipes/' + tId),
+  importRecipe: (tUrl) => post('/nutrition/recipes/import', { url: tUrl }),
   createRecipe: (tBody) => post('/nutrition/recipes', tBody),
   updateRecipe: (tId, tBody) => put('/nutrition/recipes/' + tId, tBody),
   deleteRecipe: (tId) => del('/nutrition/recipes/' + tId),

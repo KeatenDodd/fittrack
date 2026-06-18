@@ -21,10 +21,13 @@ export async function render(tRoot) {
     mount(tRoot, [
       h('div.page-head', { style: 'display:flex;justify-content:space-between;align-items:center' }, [
         h('div', {}, [h('div.eyebrow', { text: 'Nutrition' }), h('h1', { text: 'Recipes' })]),
-        h('button.btn.btn-accent.btn-sm', { type: 'button', text: '+ New', onclick: () => showBuilder(null) }),
+        h('div.btn-row', {}, [
+          h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '🔗 Import', onclick: () => openImportSheet(showBuilder) }),
+          h('button.btn.btn-accent.btn-sm', { type: 'button', text: '+ New', onclick: () => showBuilder(null) }),
+        ]),
       ]),
       h('p.faint', { style: 'font-size:13px;margin:-4px 0 14px',
-        text: 'Combine foods into a recipe; every macro and micro auto-totals per serving.' }),
+        text: 'Build one by hand or import from a recipe URL; every macro and micro auto-totals per serving.' }),
       aRecipes.length
         ? h('div', {}, aRecipes.map(recipeCard))
         : h('div.empty', {}, [h('p', { text: 'No recipes yet.' }),
@@ -52,7 +55,10 @@ export async function render(tRoot) {
   }
 
   // ---- builder --------------------------------------------------------------
-  async function showBuilder(iId) {
+  // oImported (optional): a recipe parsed from a URL — { name, servings,
+  // ingredientLines, nutrition, sourceUrl }. Its lines land in oDraft.pending
+  // for the user to match to foods.
+  async function showBuilder(iId, oImported) {
     mount(tRoot, h('div.empty', { text: 'Loading…' }));
     const oCatalog = await nutrientCatalog();
     let oDraft;
@@ -64,9 +70,16 @@ export async function render(tRoot) {
           foodId: oI.foodId, name: oI.name, brand: oI.brand, grams: oI.grams,
           nutrients: per100From(oI.nutrients, oI.grams),
         })),
+        pending: [],
+      };
+    } else if (oImported) {
+      oDraft = {
+        id: null, name: oImported.name || '', servings: oImported.servings || 1,
+        ingredients: [], pending: (oImported.ingredientLines || []).slice(),
+        nutritionRef: oImported.nutrition || null, sourceUrl: oImported.sourceUrl || null,
       };
     } else {
-      oDraft = { id: null, name: '', servings: 1, ingredients: [] };
+      oDraft = { id: null, name: '', servings: 1, ingredients: [], pending: [] };
     }
     paintBuilder(oDraft, oCatalog);
   }
@@ -79,6 +92,38 @@ export async function render(tRoot) {
 
     const oIngList = h('div.card.tight');
     const oTotalsEl = h('div');
+    const oPendingEl = h('div');
+
+    // Imported ingredient lines awaiting a food match. Tapping one opens the
+    // picker pre-seeded with the parsed name + grams, so it's a one-tap confirm.
+    function repaintPending() {
+      const aPending = oDraft.pending || [];
+      if (!aPending.length) { mount(oPendingEl, null); return; }
+      mount(oPendingEl, [
+        h('div.meal-head', { style: 'margin-top:8px' }, [
+          h('span.name', { text: 'From import — match each' }),
+          h('span.faint', { text: aPending.length + ' left' }),
+        ]),
+        oDraft.nutritionRef && oDraft.nutritionRef.energy_kcal
+          ? h('p.faint', { style: 'font-size:12px;margin:0 0 6px',
+              text: 'Site lists ~' + num(oDraft.nutritionRef.energy_kcal) + ' kcal/serving — match ingredients below to compute ours.' })
+          : null,
+        h('div.card.tight', {}, aPending.map((oLine, iIdx) => h('div.row', {}, [
+          h('div', { style: 'flex:1;min-width:0' }, [
+            h('div.label', { text: oLine.raw }),
+            h('div.sub', { text: oLine.grams ? num(oLine.grams) + ' g · tap Match' : 'tap Match to pick the food & amount' }),
+          ]),
+          h('button.btn.btn-sm', { type: 'button', text: 'Match', style: 'flex:0 0 auto',
+            onclick: () => openIngredientPicker((oIng) => {
+              oDraft.ingredients.push(oIng);
+              oDraft.pending.splice(iIdx, 1);
+              repaintIngredients(); repaintPending(); repaintTotals();
+            }, { query: oLine.name, grams: oLine.grams }) }),
+          h('button.icon-btn', { type: 'button', text: '×', title: 'Skip this line',
+            onclick: () => { oDraft.pending.splice(iIdx, 1); repaintPending(); } }),
+        ]))),
+      ]);
+    }
 
     function repaintIngredients() {
       mount(oIngList, [
@@ -158,6 +203,7 @@ export async function render(tRoot) {
       ]),
       h('label.field', {}, [h('span.lbl', { text: 'Name' }), oName]),
       h('label.field', { style: 'max-width:180px' }, [h('span.lbl', { text: 'Servings it makes' }), oServings]),
+      oPendingEl,
       h('div.meal-head', { style: 'margin-top:8px' }, [h('span.name', { text: 'Ingredients' })]),
       oIngList,
       h('div.meal-head', { style: 'margin-top:8px' }, [h('span.name', { text: 'Totals' })]),
@@ -171,13 +217,46 @@ export async function render(tRoot) {
           }) }) : null,
       ]),
     ]);
+    repaintPending();
     repaintIngredients();
     repaintTotals();
   }
 }
 
+// URL import sheet: paste a recipe link, fetch its structured data, then hand
+// the parsed recipe to the builder for ingredient matching.
+function openImportSheet(tToBuilder) {
+  openSheet('Import from URL', (tBody, tClose) => {
+    const oUrl = h('input', { type: 'url', inputmode: 'url', placeholder: 'https://…recipe page' });
+    const oStatus = h('p.faint', { style: 'font-size:12.5px;margin:8px 0 0' });
+    async function go() {
+      const sUrl = oUrl.value.trim();
+      if (!sUrl) { toast('Paste a recipe URL'); return; }
+      oStatus.textContent = 'Fetching recipe…';
+      try {
+        const oData = await api.importRecipe(sUrl);
+        tClose();
+        tToBuilder(null, oData.recipe);
+      } catch (tErr) {
+        oStatus.textContent = tErr.message || 'Could not import that page.';
+      }
+    }
+    oUrl.addEventListener('keydown', (tEvent) => { if (tEvent.key === 'Enter') go(); });
+    mount(tBody, [
+      h('label.field', {}, [h('span.lbl', { text: 'Recipe URL' }), oUrl]),
+      h('p.faint', { style: 'font-size:12.5px;margin:2px 0 0',
+        text: 'Pulls the name, servings, ingredients and nutrition from the page. You’ll match each ingredient to a food to total the macros.' }),
+      h('button.btn.btn-accent.btn-block', { type: 'button', text: 'Import', onclick: go, style: 'margin-top:10px' }),
+      oStatus,
+    ]);
+    oUrl.focus();
+  });
+}
+
 // ---- ingredient picker (own bottom sheet — opened from the full page) --------
-function openIngredientPicker(tOnAdd) {
+// oSeed (optional): { query, grams } to pre-run the search and default the
+// amount, so matching an imported line is a one-tap confirm.
+function openIngredientPicker(tOnAdd, oSeed) {
   openSheet('Add ingredient', (tBody, tClose) => {
     const backBtn = () => h('button', { type: 'button', text: '‹ Back to search', onclick: goSearch,
       style: LINK + ';margin-bottom:10px' });
@@ -185,7 +264,8 @@ function openIngredientPicker(tOnAdd) {
     // pick a resolved food (has .nutrients per 100), then ask grams
     function goGrams(oFood) {
       const fServing = Number(oFood.serving_size || oFood.servingSize) || 0;
-      const oG = h('input.num', { type: 'number', step: 'any', value: fServing > 0 ? fServing : 100 });
+      const fDefault = (oSeed && oSeed.grams) || (fServing > 0 ? fServing : 100);
+      const oG = h('input.num', { type: 'number', step: 'any', value: fDefault });
       async function add() {
         const fGrams = Number(oG.value);
         if (!Number.isFinite(fGrams) || fGrams <= 0) { toast('Enter grams'); return; }
@@ -238,6 +318,8 @@ function openIngredientPicker(tOnAdd) {
         ]),
         oResults,
       ]);
+      // Seeded from an imported line: prefill the query and search immediately.
+      if (oSeed && oSeed.query) { oSearch.value = oSeed.query; runSearch(oSeed.query); }
       oSearch.focus();
     }
 
