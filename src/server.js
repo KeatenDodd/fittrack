@@ -27,12 +27,54 @@ if (oConfig.bSea && process.platform === 'win32' && process.env.FITTRACK_BG !== 
   return; // don't start a server in this console process
 }
 
+// Open the UI in a dedicated app window (Edge/Chrome --app: no tabs or address
+// bar, its own taskbar entry) so it feels like a desktop app. Falls back to the
+// default browser. Either way the server still listens on the LAN, so phones can
+// reach it by the hub's IP exactly as before.
+function openAppWindow(sUrl) {
+  const aCandidates = [
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ].filter(Boolean);
+  const sBrowser = aCandidates.find((p) => { try { return fs.existsSync(p); } catch (tErr) { return false; } });
+  if (sBrowser) {
+    try {
+      spawn(sBrowser, ['--app=' + sUrl, '--user-data-dir=' + path.join(oConfig.sDataDir, 'appwindow')],
+        { detached: true, stdio: 'ignore' }).unref();
+      return;
+    } catch (tErr) { /* fall through to the default browser */ }
+  }
+  try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
+  catch (tErr) { /* ignore */ }
+}
+
+// Bind, retrying briefly on EADDRINUSE. After a self-update the old server may
+// still be releasing the port when the new one starts; without this the restart
+// would crash and the app wouldn't come back.
+function listenRetry(oServer, iPort, sHost, fnReady, iTries) {
+  let iLeft = iTries;
+  let bReady = false;
+  // Persistent handlers (attached once) so retries don't accumulate listeners.
+  oServer.on('listening', () => { if (!bReady) { bReady = true; fnReady(); } });
+  oServer.on('error', (tErr) => {
+    if (bReady) return;
+    if (tErr.code === 'EADDRINUSE' && iLeft > 0) {
+      iLeft -= 1;
+      console.warn('Port ' + iPort + ' busy — retrying in 1s (' + iLeft + ' left)…');
+      setTimeout(() => { if (!bReady) oServer.listen(iPort, sHost); }, 1000);
+    } else {
+      console.error('Could not bind port ' + iPort + ': ' + tErr.message);
+    }
+  });
+  oServer.listen(iPort, sHost);
+}
+
 function launchInBackground() {
   const sUrl = 'http://localhost:' + oConfig.iPort;
-  const openBrowser = () => {
-    try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
-    catch (tErr) { /* ignore */ }
-  };
+  const openBrowser = () => openAppWindow(sUrl);
   const ping = () => new Promise((resolve) => {
     const oReq = http.get({ host: '127.0.0.1', port: oConfig.iPort, path: '/api/health', timeout: 1000 },
       (oRes) => { oRes.resume(); resolve(oRes.statusCode === 200); });
@@ -242,27 +284,24 @@ function readCerts() {
 
 const oCerts = readCerts();
 if (oCerts) {
-  https.createServer(oCerts, oApp).listen(oConfig.iPort, oConfig.sHost, () => {
+  listenRetry(https.createServer(oCerts, oApp), oConfig.iPort, oConfig.sHost, () => {
     console.log(`FitTrack (HTTPS) on https://${oConfig.sHost}:${oConfig.iPort}`);
-  });
+  }, 12);
   // Also a plain-HTTP listener (port+1) for native apps that can't trust the
   // local mkcert certificate — e.g. the watch's Health exporter. The browser
   // app keeps using HTTPS (the camera/barcode needs a secure context).
   const iHttpPort = parseInt(process.env.HTTP_PORT || String(oConfig.iPort + 1), 10);
-  http.createServer(oApp).listen(iHttpPort, oConfig.sHost, () => {
+  listenRetry(http.createServer(oApp), iHttpPort, oConfig.sHost, () => {
     console.log(`FitTrack (HTTP, for device sync) on http://${oConfig.sHost}:${iHttpPort}`);
-  });
+  }, 12);
 } else {
-  http.createServer(oApp).listen(oConfig.iPort, oConfig.sHost, () => {
+  listenRetry(http.createServer(oApp), oConfig.iPort, oConfig.sHost, () => {
     const sUrl = 'http://localhost:' + oConfig.iPort;
     if (oConfig.bSea) {
       console.log('FitTrack running in the background on ' + sUrl + ' (data in ' + oConfig.sDataDir + ')');
-      // Open the browser only when this isn't the background relaunch (the
+      // Open the app window only when this isn't the background relaunch (the
       // launcher process already opened it for the packaged exe).
-      if (process.env.FITTRACK_BG !== '1') {
-        try { spawn('cmd', ['/c', 'start', '', sUrl], { detached: true, stdio: 'ignore' }).unref(); }
-        catch (tErr) { /* ignore */ }
-      }
+      if (process.env.FITTRACK_BG !== '1') openAppWindow(sUrl);
       startTray(sUrl);
       // Check GitHub for a newer build (applies on next launch). Fire-and-forget.
       try { require('./updater').checkForUpdate().catch(() => {}); } catch (tErr) { /* ignore */ }
@@ -270,5 +309,5 @@ if (oCerts) {
       console.warn('No certs found in ' + oConfig.sCertDir + ' — starting HTTP. Camera/barcode will not work until you add mkcert certs.');
       console.log('FitTrack (HTTP) on ' + sUrl);
     }
-  });
+  }, 12);
 }

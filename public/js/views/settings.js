@@ -135,13 +135,44 @@ function updateBlock(oVerInit) {
 
   async function doApply(tEvent) {
     tEvent.currentTarget.disabled = true;
-    // The server quits ~0.5s after responding, so this request may resolve or
-    // error as it closes — either way the update is now applying.
-    try { await api.applyUpdate(); } catch (tErr) { /* expected as server exits */ }
+    // The server quits ~0.5s after responding to swap its own exe, so this
+    // request usually errors as the connection drops — that's expected. A 409
+    // means nothing was actually staged.
+    try {
+      await api.applyUpdate();
+    } catch (tErr) {
+      if (tErr.iStatus === 409) { toast('No update is ready yet'); paint(); return; }
+      /* connection dropped as the server exited — proceed to wait for restart */
+    }
     mount(oWrap, h('div.callout', {}, [
       h('strong', { text: 'Updating…' }),
-      h('p', { style: 'margin:6px 0 0', text: 'FitTrack is restarting. A new window will open in a few seconds — if it doesn’t, just reopen the app.' }),
+      h('p', { style: 'margin:6px 0 0', text: 'Swapping in the new version and restarting the server. This page reloads automatically when it’s back.' }),
     ]));
+    const bBack = await waitForRestart(90000);
+    if (bBack) { location.reload(); return; }
+    mount(oWrap, h('div.callout', {}, [
+      h('strong', { text: 'Still waiting for the server…' }),
+      h('p', { style: 'margin:6px 0 8px', text: 'If you ran this from another device, the app restarts on the machine that hosts FitTrack — it may need a moment, or a manual reopen there. Your data is safe.' }),
+      h('button.btn.btn-sm.btn-ghost', { type: 'button', text: 'Reload now', onclick: () => location.reload() }),
+    ]));
+  }
+
+  // Poll /api/health until the server has gone down and come back (the restart),
+  // so the page can reload onto the new version on its own.
+  async function waitForRestart(iMaxMs) {
+    const iStart = Date.now();
+    let bWentDown = false;
+    const ok = async () => {
+      try { return (await fetch('/api/health', { cache: 'no-store' })).ok; }
+      catch (tErr) { return false; }
+    };
+    while (Date.now() - iStart < iMaxMs) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const bUp = await ok();
+      if (!bUp) bWentDown = true;
+      else if (bWentDown) return true; // down then back up = restarted
+    }
+    return false;
   }
 
   function paint() {

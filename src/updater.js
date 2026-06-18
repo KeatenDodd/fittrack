@@ -112,17 +112,35 @@ async function applyUpdate() {
 }
 
 // Detached PowerShell: wait for this process to exit, then replace the exe.
-// When bRelaunch is set it also starts the freshly-swapped exe (one-click update).
+// When bRelaunch is set it also restarts the app and retries until the server is
+// actually back up (important for remote/headless hubs where a single launch may
+// race the old process releasing the port). Writes a swap.log for diagnosis.
 function armSwap(sStaged, sExe, iPid, bRelaunch) {
   if (process.platform !== 'win32') return;
+  const q = (s) => String(s).replace(/'/g, "''");
+  const sLog = path.join(oConfig.sDataDir, 'update', 'swap.log');
   const aLines = [
     "$ErrorActionPreference='SilentlyContinue'",
+    "function log($m){ try { Add-Content -Path '" + q(sLog) + "' -Value ((Get-Date).ToString('s')+' '+$m) } catch {} }",
+    'log ("waiting for pid ' + iPid + '")',
     'Wait-Process -Id ' + iPid + ' -ErrorAction SilentlyContinue',
-    'Start-Sleep -Milliseconds 700',
-    "Copy-Item '" + sStaged.replace(/'/g, "''") + "' '" + sExe.replace(/'/g, "''") + "' -Force",
-    "Remove-Item '" + sStaged.replace(/'/g, "''") + "' -Force",
+    'Start-Sleep -Milliseconds 900',
+    "Copy-Item '" + q(sStaged) + "' '" + q(sExe) + "' -Force",
+    'if ($?) {',
+    '  log "swapped exe"',
+    "  Remove-Item '" + q(sStaged) + "' -Force",
   ];
-  if (bRelaunch) aLines.push("Start-Process -FilePath '" + sExe.replace(/'/g, "''") + "'");
+  if (bRelaunch) {
+    // Launch, then verify the server answers; retry a few times if not.
+    aLines.push(
+      '  for ($i=0; $i -lt 6; $i++) {',
+      "    Start-Process -FilePath '" + q(sExe) + "'",
+      '    Start-Sleep -Seconds 3',
+      "    try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri 'http://localhost:" + oConfig.iPort + "/api/health').StatusCode -eq 200) { log 'server is up'; break } } catch { log ('relaunch attempt '+($i+1)+' not up yet') }",
+      '  }'
+    );
+  }
+  aLines.push('} else { log "copy failed — keeping staged file for next launch" }');
   const sPs = aLines.join('\n');
   try {
     const sEnc = Buffer.from(sPs, 'utf16le').toString('base64');
