@@ -52,6 +52,10 @@ async function tryRefresh() {
 // its own content-type; metadata travels in the query string.
 async function rawUpload(tPath, tFile) {
   const oHeaders = { 'Content-Type': tFile.type || 'application/octet-stream' };
+  // Camera clips sometimes arrive with an empty File.type (so the line above
+  // falls back to octet-stream). Pass the filename so the server can recover the
+  // real media type from its extension instead of rejecting the upload.
+  if (tFile.name) oHeaders['X-File-Name'] = encodeURIComponent(tFile.name);
   const sToken = oStore.accessToken;
   if (sToken) oHeaders.Authorization = 'Bearer ' + sToken;
   const oResponse = await fetch('/api' + tPath, { method: 'POST', headers: oHeaders, body: tFile });
@@ -145,6 +149,11 @@ export const api = {
   food: (tId) => get('/nutrition/foods/' + tId),
   foodByBarcode: (tCode) => get('/nutrition/foods/barcode/' + encodeURIComponent(tCode)),
   saveFood: (tBody) => post('/nutrition/foods', tBody),
+  recentFoods: () => get('/nutrition/recents'),
+  favoriteFoods: () => get('/nutrition/favorites'),
+  addFavoriteFood: (tFoodId) => post('/nutrition/favorites', { foodId: tFoodId }),
+  removeFavoriteFood: (tFoodId) => del('/nutrition/favorites/' + tFoodId),
+  removeRecentFood: (tFoodId) => del('/nutrition/recents/' + tFoodId),
   foodLog: (tDate) => get('/nutrition/log' + (tDate ? '?date=' + tDate : '')),
   logFood: (tBody) => post('/nutrition/log', tBody),
   updateLog: (tId, tBody) => put('/nutrition/log/' + tId, tBody),

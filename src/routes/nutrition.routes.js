@@ -166,31 +166,49 @@ async function recipeTotals(aIngredients) {
   return { totals: oTotals, weight: fWeight };
 }
 
-// Recompute the derived food for a recipe from its current ingredients.
-async function syncRecipeFood(iRecipeId, sName, fServings, aIngredients, iUserId) {
-  const { totals, weight } = await recipeTotals(aIngredients);
-  const oPer100 = {};
-  if (weight > 0) {
-    for (const sKey of Object.keys(totals)) oPer100[sKey] = totals[sKey] / weight * 100;
+// Recompute the derived food for a recipe. With a manual per-serving override we
+// store a nominal food (1 serving = 100 units = the override macros) so logging a
+// serving yields exactly those numbers; otherwise we total the matched
+// ingredients by weight as before.
+async function syncRecipeFood(iRecipeId, sName, fServings, aIngredients, oOverride, iUserId) {
+  let oFoodArgs;
+  if (oOverride && Object.keys(oOverride).length) {
+    oFoodArgs = { servingSize: 100, nutrients: oOverride };
+  } else {
+    const { totals, weight } = await recipeTotals(aIngredients);
+    const oPer100 = {};
+    if (weight > 0) for (const sKey of Object.keys(totals)) oPer100[sKey] = totals[sKey] / weight * 100;
+    oFoodArgs = { servingSize: Math.round((fServings > 0 ? weight / fServings : weight) * 100) / 100, nutrients: oPer100 };
   }
-  const fServingGrams = fServings > 0 ? weight / fServings : weight;
   const iFoodId = await upsertFood({
-    name: sName,
-    source: 'recipe',
-    sourceRef: 'recipe:' + iRecipeId,
-    baseUnit: 'g',
-    servingSize: Math.round(fServingGrams * 100) / 100,
-    servingDesc: '1 serving',
-    nutrients: oPer100,
+    name: sName, source: 'recipe', sourceRef: 'recipe:' + iRecipeId,
+    baseUnit: 'g', servingDesc: '1 serving', ...oFoodArgs,
   }, iUserId);
   await oDb.query('UPDATE recipes SET food_id = $1 WHERE id = $2', [iFoodId, iRecipeId]);
-  return { foodId: iFoodId, weight, servingGrams: fServingGrams, totals };
+  return { foodId: iFoodId };
 }
 
 function cleanIngredients(aRaw) {
   return (Array.isArray(aRaw) ? aRaw : [])
     .map((oI) => ({ food_id: Number(oI.foodId ?? oI.food_id), grams: Number(oI.grams) }))
     .filter((oI) => Number.isFinite(oI.food_id) && Number.isFinite(oI.grams) && oI.grams > 0);
+}
+
+// Accepted-but-unmatched ingredient names (display only, no macros).
+function cleanText(aRaw) {
+  return (Array.isArray(aRaw) ? aRaw : [])
+    .map((s) => String(s || '').trim()).filter(Boolean).slice(0, 100);
+}
+
+// Manual per-serving macro override: keep only finite numeric nutrient values.
+function cleanOverride(oRaw) {
+  if (!oRaw || typeof oRaw !== 'object') return null;
+  const oOut = {};
+  for (const sKey of Object.keys(oRaw)) {
+    const f = Number(oRaw[sKey]);
+    if (Number.isFinite(f)) oOut[sKey] = f;
+  }
+  return Object.keys(oOut).length ? oOut : null;
 }
 
 async function saveIngredients(iRecipeId, aIngredients) {
@@ -263,10 +281,13 @@ oRouter.get('/recipes/:id', wrap(async (tReq, tRes) => {
   }
   const { totals, weight } = await recipeTotals(aIng.map((i) => ({ food_id: i.foodId, grams: i.grams })));
   const fServings = Number(oR.servings) || 1;
+  let aText = []; let oOverride = null;
+  try { aText = JSON.parse(oR.text_ingredients || '[]'); } catch (tErr) { /* ignore */ }
+  try { oOverride = oR.override_nutrients ? JSON.parse(oR.override_nutrients) : null; } catch (tErr) { /* ignore */ }
   tRes.json({
     recipe: {
       id: oR.id, name: oR.name, servings: fServings, foodId: oR.food_id,
-      ingredients: aIng, totals, weight,
+      ingredients: aIng, textIngredients: aText, override: oOverride, totals, weight,
       servingGrams: fServings > 0 ? weight / fServings : weight,
     },
   });
@@ -278,14 +299,17 @@ oRouter.post('/recipes', wrap(async (tReq, tRes) => {
   if (!sName) throw httpError(400, 'Recipe name is required');
   const fServings = Number(tReq.body.servings) || 1;
   const aIng = cleanIngredients(tReq.body.ingredients);
-  if (!aIng.length) throw httpError(400, 'Add at least one ingredient');
+  const aText = cleanText(tReq.body.textIngredients);
+  const oOverride = cleanOverride(tReq.body.override);
+  if (!aIng.length && !aText.length) throw httpError(400, 'Add at least one ingredient');
 
   const oRow = await oDb.one(
-    'INSERT INTO recipes (user_id, name, servings) VALUES ($1, $2, $3) RETURNING id',
-    [tReq.iUserId, sName, fServings]
+    `INSERT INTO recipes (user_id, name, servings, text_ingredients, override_nutrients)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [tReq.iUserId, sName, fServings, JSON.stringify(aText), oOverride ? JSON.stringify(oOverride) : null]
   );
   await saveIngredients(oRow.id, aIng);
-  await syncRecipeFood(oRow.id, sName, fServings, aIng, tReq.iUserId);
+  await syncRecipeFood(oRow.id, sName, fServings, aIng, oOverride, tReq.iUserId);
   tRes.status(201).json({ id: oRow.id });
 }));
 
@@ -300,12 +324,16 @@ oRouter.put('/recipes/:id', wrap(async (tReq, tRes) => {
   if (!sName) throw httpError(400, 'Recipe name is required');
   const fServings = Number(tReq.body.servings) || 1;
   const aIng = cleanIngredients(tReq.body.ingredients);
-  if (!aIng.length) throw httpError(400, 'Add at least one ingredient');
+  const aText = cleanText(tReq.body.textIngredients);
+  const oOverride = cleanOverride(tReq.body.override);
+  if (!aIng.length && !aText.length) throw httpError(400, 'Add at least one ingredient');
 
-  await oDb.query('UPDATE recipes SET name = $1, servings = $2 WHERE id = $3',
-    [sName, fServings, oR.id]);
+  await oDb.query(
+    'UPDATE recipes SET name = $1, servings = $2, text_ingredients = $3, override_nutrients = $4 WHERE id = $5',
+    [sName, fServings, JSON.stringify(aText), oOverride ? JSON.stringify(oOverride) : null, oR.id]
+  );
   await saveIngredients(oR.id, aIng);
-  await syncRecipeFood(oR.id, sName, fServings, aIng, tReq.iUserId);
+  await syncRecipeFood(oR.id, sName, fServings, aIng, oOverride, tReq.iUserId);
   tRes.json({ id: oR.id });
 }));
 
@@ -559,7 +587,85 @@ oRouter.post('/log', wrap(async (tReq, tRes) => {
     [tReq.iUserId, tReq.body.foodId, tReq.body.mealType || 'snack', fQuantity,
      tReq.body.unit || 'g', tReq.body.loggedAt || null]
   );
+  await recordUsage(tReq.iUserId, tReq.body.foodId);
   tRes.status(201).json({ entry: oRow });
+}));
+
+// --- recents & favorites ------------------------------------------------------
+// Bump a food's usage when it's logged: surfaces it in Recents and auto-adds it
+// to Favorites once logged more than 3 times (unless the user dismissed it).
+// Recipe-derived foods are skipped — favorites are for food entries, not recipes.
+async function recordUsage(iUserId, iFoodId) {
+  const oFood = await oDb.one('SELECT source FROM foods WHERE id = $1', [iFoodId]);
+  if (!oFood || oFood.source === 'recipe') return;
+  await oDb.query(
+    `INSERT INTO food_usage (user_id, food_id, uses, last_used_at, hidden)
+     VALUES ($1, $2, 1, datetime('now','localtime'), 0)
+     ON CONFLICT (user_id, food_id) DO UPDATE SET
+       uses = uses + 1,
+       last_used_at = excluded.last_used_at,
+       hidden = 0,
+       favorite = CASE WHEN fav_dismissed = 0 AND uses + 1 > 3 THEN 1 ELSE favorite END`,
+    [iUserId, iFoodId]
+  );
+}
+
+// Shared SELECT for recents/favorites rows (id, name, brand + per-100 energy).
+const USAGE_COLS =
+  `f.id, f.name, f.brand, f.source, u.uses, u.favorite,
+   (SELECT fn.amount FROM food_nutrients fn JOIN nutrients n ON n.id = fn.nutrient_id
+    WHERE fn.food_id = f.id AND n.key = 'energy_kcal') AS kcal100`;
+
+oRouter.get('/recents', wrap(async (tReq, tRes) => {
+  const aRows = await oDb.many(
+    `SELECT ${USAGE_COLS} FROM food_usage u JOIN foods f ON f.id = u.food_id
+     WHERE u.user_id = $1 AND u.hidden = 0 AND u.last_used_at IS NOT NULL AND f.source != 'recipe'
+     ORDER BY u.last_used_at DESC LIMIT 20`,
+    [tReq.iUserId]
+  );
+  tRes.json({ recents: aRows });
+}));
+
+oRouter.get('/favorites', wrap(async (tReq, tRes) => {
+  const aRows = await oDb.many(
+    `SELECT ${USAGE_COLS} FROM food_usage u JOIN foods f ON f.id = u.food_id
+     WHERE u.user_id = $1 AND u.favorite = 1 AND f.source != 'recipe'
+     ORDER BY lower(f.name) ASC`,
+    [tReq.iUserId]
+  );
+  tRes.json({ favorites: aRows });
+}));
+
+// Manually add a food to favorites (creating a usage row if needed).
+oRouter.post('/favorites', wrap(async (tReq, tRes) => {
+  const oFood = await oDb.one("SELECT id, source FROM foods WHERE id = $1", [tReq.body.foodId]);
+  if (!oFood) throw httpError(404, 'Food not found');
+  if (oFood.source === 'recipe') throw httpError(400, 'Recipes can’t be favorited here');
+  await oDb.query(
+    `INSERT INTO food_usage (user_id, food_id, favorite, fav_dismissed)
+     VALUES ($1, $2, 1, 0)
+     ON CONFLICT (user_id, food_id) DO UPDATE SET favorite = 1, fav_dismissed = 0`,
+    [tReq.iUserId, oFood.id]
+  );
+  tRes.status(201).json({ ok: true });
+}));
+
+// Remove from favorites (and remember the choice so it won't auto-re-add).
+oRouter.delete('/favorites/:foodId', wrap(async (tReq, tRes) => {
+  await oDb.query(
+    'UPDATE food_usage SET favorite = 0, fav_dismissed = 1 WHERE user_id = $1 AND food_id = $2',
+    [tReq.iUserId, tReq.params.foodId]
+  );
+  tRes.json({ ok: true });
+}));
+
+// Remove from Recents (keeps favorite status; re-logging brings it back).
+oRouter.delete('/recents/:foodId', wrap(async (tReq, tRes) => {
+  await oDb.query(
+    'UPDATE food_usage SET hidden = 1 WHERE user_id = $1 AND food_id = $2',
+    [tReq.iUserId, tReq.params.foodId]
+  );
+  tRes.json({ ok: true });
 }));
 
 // PUT /api/nutrition/log/:id

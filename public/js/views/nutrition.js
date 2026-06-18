@@ -198,21 +198,64 @@ function openAddFood(sMeal, sDate, tOnDone) {
       mount(tBody, [renderQuantity(tFood, sMeal, sDate, tClose, tOnDone, goSearch)]);
     }
 
-    // step: search local + Open Food Facts
+    // step: search local + Open Food Facts (with Favorites + Recents when empty)
     function goSearch() {
       stopScanner();
       const oSearch = h('input', { type: 'search', placeholder: 'Search foods…' });
       const oResults = h('div', { style: 'max-height:42vh;overflow-y:auto' });
+      const oQuick = h('div', { style: 'max-height:42vh;overflow-y:auto' });
       const oActions = h('div.btn-row', { style: 'margin:12px 0' }, [
         h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '📷 Scan barcode', onclick: goScanner }),
         h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '🍲 Recipes', onclick: goRecipes }),
         h('button.btn.btn-ghost.btn-sm', { type: 'button', text: '+ Custom food', onclick: goCustom }),
       ]);
+
+      // Tap a food to log it; ☆ adds to favorites, × removes the record.
+      async function logFromUsage(oItem) { const oD = await guard(api.food(oItem.id)); goQuantity(oD.food); }
+      function quickRow(oItem, sKind) {
+        const aActions = [];
+        if (sKind === 'recent' && !oItem.favorite) {
+          aActions.push(h('button.icon-btn', { type: 'button', text: '☆', title: 'Add to favorites',
+            onclick: async () => { await guard(api.addFavoriteFood(oItem.id)); toast('Added to favorites'); loadQuick(); } }));
+        }
+        aActions.push(h('button.icon-btn', { type: 'button', text: '×',
+          title: sKind === 'fav' ? 'Remove from favorites' : 'Remove from recents',
+          onclick: async () => {
+            await guard(sKind === 'fav' ? api.removeFavoriteFood(oItem.id) : api.removeRecentFood(oItem.id));
+            loadQuick();
+          } }));
+        return h('div', { style: 'display:flex;align-items:center;gap:8px;padding:9px 4px;border-bottom:1px solid var(--line)' }, [
+          h('div', { style: 'flex:1;min-width:0;cursor:pointer', onclick: () => logFromUsage(oItem) }, [
+            h('div.nm', { text: oItem.name }),
+            h('div.br', { text: (oItem.brand ? oItem.brand + ' · ' : '') + (oItem.kcal100 != null ? Math.round(oItem.kcal100) + ' kcal/100g' : '') }),
+          ]),
+          ...aActions,
+        ]);
+      }
+      function loadQuick() {
+        Promise.all([api.favoriteFoods().catch(() => ({ favorites: [] })), api.recentFoods().catch(() => ({ recents: [] }))])
+          .then(([oF, oR]) => {
+            const aFav = oF.favorites || []; const aRec = oR.recents || [];
+            const aOut = [];
+            if (aFav.length) {
+              aOut.push(h('div.meal-head', { style: 'margin-top:4px' }, [h('span.name', { text: '⭐ Favorites' })]));
+              aOut.push(h('div', {}, aFav.map((o) => quickRow(o, 'fav'))));
+            }
+            if (aRec.length) {
+              aOut.push(h('div.meal-head', { style: 'margin-top:10px' }, [h('span.name', { text: '🕘 Recent' })]));
+              aOut.push(h('div', {}, aRec.map((o) => quickRow(o, 'recent'))));
+            }
+            if (!aOut.length) aOut.push(h('p.faint', { style: 'padding:10px 4px;font-size:13px', text: 'Foods you log show up here for quick re-logging.' }));
+            mount(oQuick, aOut);
+          });
+      }
+
       let oTimer = null;
       oSearch.addEventListener('input', () => {
         clearTimeout(oTimer);
         const sQuery = oSearch.value.trim();
-        if (sQuery.length < 2) { mount(oResults, null); return; }
+        if (sQuery.length < 2) { mount(oResults, null); oQuick.style.display = ''; return; }
+        oQuick.style.display = 'none';
         oTimer = setTimeout(() => runSearch(sQuery), 280);
       });
       async function runSearch(sQuery) {
@@ -230,7 +273,8 @@ function openAddFood(sMeal, sDate, tOnDone) {
         }
         mount(oResults, oRows.length ? oRows : h('p.muted', { style: 'padding:10px 4px', text: 'No matches found.' }));
       }
-      mount(tBody, [oSearch, oActions, oResults]);
+      mount(tBody, [oSearch, oActions, oQuick, oResults]);
+      loadQuick();
       oSearch.focus();
     }
 
@@ -417,6 +461,7 @@ function renderQuantity(tFood, sMeal, sDate, tClose, tOnDone, tBack) {
       h('strong', { text: tFood.name }),
       tFood.brand ? h('div.faint', { text: tFood.brand }) : null,
       h('div.faint', { style: 'font-size:12.5px;margin-top:4px', text: num(fKcalPer100) + ' kcal per 100 g' }),
+      (tFood.source !== 'recipe') ? favoriteToggle(tFood) : null,
     ]),
     h('div.inline-fields', {}, [
       h('label.field', { style: 'flex:1' }, [h('span.lbl', { text: 'Amount (grams)' }), oQty]),
@@ -456,6 +501,22 @@ function fullFacts(tFood, oQty) {
     if (bOpen && oCatalog) mount(oWrap, factsList(tFood, Number(oQty.value) || 0, oCatalog));
   });
   return h('div', {}, [oBtn, oWrap]);
+}
+
+// Star toggle on the log step: ensures the food is saved, then favorites it.
+function favoriteToggle(tFood) {
+  const oBtn = h('button', { type: 'button', text: '☆ Add to favorites',
+    style: 'background:none;border:0;color:var(--accent);cursor:pointer;padding:0;margin-top:8px;font-size:13px' });
+  oBtn.addEventListener('click', async () => {
+    oBtn.disabled = true;
+    try {
+      let iId = tFood.id;
+      if (!iId) { const oSaved = await guard(api.saveFood(normalizeFood(tFood))); iId = oSaved.food.id; tFood.id = iId; }
+      await api.addFavoriteFood(iId);
+      oBtn.textContent = '⭐ Favorited';
+    } catch (tErr) { oBtn.disabled = false; toast(tErr.message || 'Could not favorite'); }
+  });
+  return oBtn;
 }
 
 export function normalizeFood(tFood) {

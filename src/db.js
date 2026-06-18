@@ -38,6 +38,20 @@ function ensureTables() {
     + ");"
     + "CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id);"
     + "CREATE INDEX IF NOT EXISTS idx_recipe_ing ON recipe_ingredients(recipe_id);"
+    // Per-user food usage: powers Recents (last_used) and Favorites (auto after
+    // >3 logs, or manual). favorite/fav_dismissed track explicit user choices;
+    // hidden removes a row from Recents without forgetting it.
+    + "CREATE TABLE IF NOT EXISTS food_usage ("
+    + " user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+    + " food_id INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,"
+    + " uses INTEGER NOT NULL DEFAULT 0,"
+    + " last_used_at TEXT,"
+    + " favorite INTEGER NOT NULL DEFAULT 0,"
+    + " fav_dismissed INTEGER NOT NULL DEFAULT 0,"
+    + " hidden INTEGER NOT NULL DEFAULT 0,"
+    + " PRIMARY KEY (user_id, food_id)"
+    + ");"
+    + "CREATE INDEX IF NOT EXISTS idx_food_usage_recent ON food_usage(user_id, last_used_at);"
   );
 }
 
@@ -49,6 +63,8 @@ function ensureColumns() {
     ['programs', 'schedule_weekdays', 'VARCHAR(20)'],
     ['programs', 'schedule_interval', 'INTEGER'],
     ['programs', 'schedule_anchor', 'TEXT'],
+    ['recipes', 'text_ingredients', 'TEXT'],     // JSON array of unmatched ingredient names
+    ['recipes', 'override_nutrients', 'TEXT'],   // JSON of manual per-serving macros
   ];
   for (const [sTable, sCol, sDef] of aAdds) {
     try {

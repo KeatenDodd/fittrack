@@ -21,13 +21,31 @@ function extFor(sMime) {
   return sMime.startsWith('video/') ? '.vid' : '.img';
 }
 
+// Reverse lookup so we can recover a media type from a filename extension when
+// the browser sends a generic/empty content-type (common for camera clips).
+const MIME_BY_EXT = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+  '.heic': 'image/heic', '.heif': 'image/heif', '.gif': 'image/gif',
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.qt': 'video/quicktime',
+  '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.3gp': 'video/3gpp', '.3gpp': 'video/3gpp',
+};
+function mimeFromName(sName) {
+  const oM = String(sName || '').toLowerCase().match(/(\.[a-z0-9]+)$/);
+  return oM ? (MIME_BY_EXT[oM[1]] || '') : '';
+}
+
 // Stream req body to <uploads>/<sub>/<uuid>.<ext>. Validates the content-type
 // prefix and enforces a byte cap. Resolves { relPath, mime, bytes }.
 function saveUpload(tReq, sSub, aAllowedPrefixes, iMaxBytes) {
   return new Promise((resolve, reject) => {
-    const sMime = String(tReq.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    let sMime = String(tReq.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    // Recover the type from the filename when the content-type is missing or a
+    // generic octet-stream (some phones label camera clips this way).
     if (!sMime || !aAllowedPrefixes.some((p) => sMime.startsWith(p))) {
-      return reject(httpError(415, 'Unsupported file type'));
+      const sName = tReq.headers['x-file-name'] ? decodeURIComponent(tReq.headers['x-file-name']) : '';
+      const sGuess = mimeFromName(sName);
+      if (sGuess && aAllowedPrefixes.some((p) => sGuess.startsWith(p))) sMime = sGuess;
+      else return reject(httpError(415, 'Unsupported file type'));
     }
     const sDir = path.join(sUploadsDir, sSub);
     fs.mkdirSync(sDir, { recursive: true });

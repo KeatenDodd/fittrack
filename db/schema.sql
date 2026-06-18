@@ -279,6 +279,8 @@ CREATE TABLE recipes (
   food_id    INTEGER     REFERENCES foods(id) ON DELETE SET NULL,
   name       VARCHAR(150) NOT NULL,
   servings   NUMERIC(6,2) NOT NULL DEFAULT 1,
+  text_ingredients  TEXT,   -- JSON array of accepted-but-unmatched ingredient names
+  override_nutrients TEXT,  -- JSON of manual per-serving macros (overrides the computed totals)
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_recipes_user ON recipes(user_id);
@@ -291,6 +293,20 @@ CREATE TABLE recipe_ingredients (
   order_index INTEGER     NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_recipe_ing ON recipe_ingredients(recipe_id);
+
+-- Per-user food usage: Recents (last_used) + Favorites (auto after >3 logs or
+-- manual). Recipe-derived foods are excluded from these lists in the queries.
+CREATE TABLE food_usage (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  food_id       INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+  uses          INTEGER NOT NULL DEFAULT 0,
+  last_used_at  TIMESTAMPTZ,
+  favorite      BOOLEAN NOT NULL DEFAULT false,
+  fav_dismissed BOOLEAN NOT NULL DEFAULT false,
+  hidden        BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (user_id, food_id)
+);
+CREATE INDEX idx_food_usage_recent ON food_usage(user_id, last_used_at);
 
 -- ----------------------------------------------------------------------------
 --  Menstrual cycle tracking (shown only for profiles with sex = 'female')

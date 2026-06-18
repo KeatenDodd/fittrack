@@ -70,16 +70,17 @@ export async function render(tRoot) {
           foodId: oI.foodId, name: oI.name, brand: oI.brand, grams: oI.grams,
           nutrients: per100From(oI.nutrients, oI.grams),
         })),
-        pending: [],
+        textIngredients: oR.textIngredients || [], override: oR.override || null, pending: [],
       };
     } else if (oImported) {
       oDraft = {
         id: null, name: oImported.name || '', servings: oImported.servings || 1,
-        ingredients: [], pending: (oImported.ingredientLines || []).slice(),
+        ingredients: [], textIngredients: [], override: null,
+        pending: (oImported.ingredientLines || []).slice(),
         nutritionRef: oImported.nutrition || null, sourceUrl: oImported.sourceUrl || null,
       };
     } else {
-      oDraft = { id: null, name: '', servings: 1, ingredients: [], pending: [] };
+      oDraft = { id: null, name: '', servings: 1, ingredients: [], textIngredients: [], override: null, pending: [] };
     }
     paintBuilder(oDraft, oCatalog);
   }
@@ -93,6 +94,26 @@ export async function render(tRoot) {
     const oIngList = h('div.card.tight');
     const oTotalsEl = h('div');
     const oPendingEl = h('div');
+    const oTextEl = h('div');
+    let bOverrideEdit = false;
+
+    // Accepted-but-unmatched ingredients: listed for reference, no macros. The
+    // user accounts for them via the manual macro override below.
+    function repaintText() {
+      const aText = oDraft.textIngredients || [];
+      if (!aText.length) { mount(oTextEl, null); return; }
+      mount(oTextEl, [
+        h('div.meal-head', { style: 'margin-top:8px' }, [
+          h('span.name', { text: 'Listed (no macros)' }),
+          h('span.faint', { text: 'set macros below' }),
+        ]),
+        h('div.card.tight', {}, aText.map((sName, iIdx) => h('div.row', {}, [
+          h('div.label', { style: 'flex:1;min-width:0', text: sName }),
+          h('button.icon-btn', { type: 'button', text: '×',
+            onclick: () => { oDraft.textIngredients.splice(iIdx, 1); repaintText(); } }),
+        ]))),
+      ]);
+    }
 
     // Imported ingredient lines awaiting a food match. Tapping one opens the
     // picker pre-seeded with the parsed name + grams, so it's a one-tap confirm.
@@ -101,9 +122,15 @@ export async function render(tRoot) {
       if (!aPending.length) { mount(oPendingEl, null); return; }
       mount(oPendingEl, [
         h('div.meal-head', { style: 'margin-top:8px' }, [
-          h('span.name', { text: 'From import — match each' }),
-          h('span.faint', { text: aPending.length + ' left' }),
+          h('span.name', { text: 'From import' }),
+          h('button', { type: 'button', text: 'Accept all as-is', style: LINK,
+            onclick: () => {
+              for (const oP of oDraft.pending) oDraft.textIngredients.push(oP.raw);
+              oDraft.pending = [];
+              repaintText(); repaintPending();
+            } }),
         ]),
+        h('p.faint', { style: 'font-size:12px;margin:0 0 6px', text: 'Match a food for real macros, or ✓ accept as-is and set the macros yourself below.' }),
         oDraft.nutritionRef && oDraft.nutritionRef.energy_kcal
           ? h('p.faint', { style: 'font-size:12px;margin:0 0 6px',
               text: 'Site lists ~' + num(oDraft.nutritionRef.energy_kcal) + ' kcal/serving — match ingredients below to compute ours.' })
@@ -113,6 +140,12 @@ export async function render(tRoot) {
             h('div.label', { text: oLine.raw }),
             h('div.sub', { text: oLine.grams ? num(oLine.grams) + ' g · tap Match' : 'tap Match to pick the food & amount' }),
           ]),
+          h('button.btn.btn-sm.btn-ghost', { type: 'button', text: '✓', title: 'Add as-is (no macros)', style: 'flex:0 0 auto',
+            onclick: () => {
+              oDraft.textIngredients.push(oLine.raw);
+              oDraft.pending.splice(iIdx, 1);
+              repaintText(); repaintPending();
+            } }),
           h('button.btn.btn-sm', { type: 'button', text: 'Match', style: 'flex:0 0 auto',
             onclick: () => openIngredientPicker((oIng) => {
               oDraft.ingredients.push(oIng);
@@ -153,42 +186,106 @@ export async function render(tRoot) {
       ]);
     }
 
+    const OV_FIELDS = [
+      ['energy_kcal', 'Calories', ''], ['protein_g', 'Protein', 'g'],
+      ['carbs_g', 'Carbs', 'g'], ['fat_g', 'Fat', 'g'], ['fiber_g', 'Fiber', 'g'],
+    ];
+
     function repaintTotals() {
       const { totals, weight } = totalsOf(oDraft);
       const fServ = Number(oDraft.servings) > 0 ? Number(oDraft.servings) : 1;
       const fServGrams = weight / fServ;
-      const oPer100 = {};
-      if (weight > 0) for (const sKey of Object.keys(totals)) oPer100[sKey] = totals[sKey] / weight * 100;
+      // per-serving computed from matched ingredients
+      const oComputed = {};
+      for (const sKey of Object.keys(totals)) oComputed[sKey] = totals[sKey] / fServ;
+      const oOv = oDraft.override;
+      const oShown = oOv || oComputed; // what counts as the recipe's per-serving macros
 
-      let bFactsOpen = false;
-      const oFactsWrap = h('div', { style: 'margin-top:8px' });
-      const oFactsBtn = h('button', { type: 'button', text: 'Show full nutrition facts', style: LINK + ';margin-top:6px',
-        onclick: () => {
-          bFactsOpen = !bFactsOpen;
-          oFactsBtn.textContent = bFactsOpen ? 'Hide full nutrition facts' : 'Show full nutrition facts';
-          mount(oFactsWrap, bFactsOpen ? factsList({ nutrients: oPer100 }, fServGrams, oCatalog) : null);
-        } });
-
-      mount(oTotalsEl, h('div.card', {}, [
+      const aChildren = [
         h('div.faint', { style: 'font-size:12px',
-          text: 'Per serving · ' + num(fServGrams) + ' g · makes ' + num(fServ) }),
+          text: oOv ? 'Per serving · your custom macros · makes ' + num(fServ)
+            : 'Per serving · ' + num(fServGrams) + ' g · makes ' + num(fServ) }),
         h('div', { style: 'display:flex;gap:16px;margin-top:6px;flex-wrap:wrap' }, [
-          chip('Calories', num((totals.energy_kcal || 0) / fServ)),
-          chip('Protein', num((totals.protein_g || 0) / fServ) + ' g'),
-          chip('Carbs', num((totals.carbs_g || 0) / fServ) + ' g'),
-          chip('Fat', num((totals.fat_g || 0) / fServ) + ' g'),
+          chip('Calories', num(oShown.energy_kcal || 0)),
+          chip('Protein', num(oShown.protein_g || 0) + ' g'),
+          chip('Carbs', num(oShown.carbs_g || 0) + ' g'),
+          chip('Fat', num(oShown.fat_g || 0) + ' g'),
         ]),
-        oFactsBtn, oFactsWrap,
-      ]));
+      ];
+
+      if (bOverrideEdit) {
+        aChildren.push(overrideEditor(oOv || oComputed));
+      } else if (oOv) {
+        aChildren.push(h('div.btn-row', { style: 'margin-top:8px' }, [
+          h('button', { type: 'button', text: 'Edit my macros', style: LINK, onclick: () => { bOverrideEdit = true; repaintTotals(); } }),
+          h('button', { type: 'button', text: 'Use computed instead', style: LINK,
+            onclick: () => { oDraft.override = null; repaintTotals(); } }),
+        ]));
+      } else {
+        aChildren.push(h('button', { type: 'button', text: 'Set my own macros', style: LINK + ';margin-top:8px',
+          onclick: () => { bOverrideEdit = true; repaintTotals(); } }));
+        // full ingredient-derived facts only make sense in computed mode
+        const oPer100 = {};
+        if (weight > 0) for (const sKey of Object.keys(totals)) oPer100[sKey] = totals[sKey] / weight * 100;
+        let bFactsOpen = false;
+        const oFactsWrap = h('div', { style: 'margin-top:8px' });
+        const oFactsBtn = h('button', { type: 'button', text: 'Show full nutrition facts', style: LINK + ';margin-top:6px;display:block',
+          onclick: () => {
+            bFactsOpen = !bFactsOpen;
+            oFactsBtn.textContent = bFactsOpen ? 'Hide full nutrition facts' : 'Show full nutrition facts';
+            mount(oFactsWrap, bFactsOpen ? factsList({ nutrients: oPer100 }, fServGrams, oCatalog) : null);
+          } });
+        aChildren.push(oFactsBtn, oFactsWrap);
+      }
+
+      mount(oTotalsEl, h('div.card', {}, aChildren));
+    }
+
+    // Inline editor for the manual per-serving macros, pre-filled with the
+    // computed-from-matched values so they're already counted.
+    function overrideEditor(oSeed) {
+      const oInputs = {};
+      const aRows = OV_FIELDS.map(([sKey, sLabel, sUnit]) => {
+        const oIn = h('input.num', { type: 'number', step: 'any',
+          value: oSeed[sKey] != null ? Math.round(Number(oSeed[sKey]) * 10) / 10 : '' });
+        oInputs[sKey] = oIn;
+        return h('label.field', { style: 'flex:1' }, [h('span.lbl', { text: sLabel + (sUnit ? ' ' + sUnit : '') }), oIn]);
+      });
+      function apply() {
+        const oOut = {};
+        for (const sKey of Object.keys(oInputs)) {
+          const f = Number(oInputs[sKey].value);
+          if (Number.isFinite(f) && oInputs[sKey].value !== '') oOut[sKey] = f;
+        }
+        oDraft.override = Object.keys(oOut).length ? oOut : null;
+        bOverrideEdit = false; repaintTotals();
+      }
+      return h('div', { style: 'margin-top:10px' }, [
+        h('p.faint', { style: 'font-size:12px;margin:0 0 6px', text: 'Per-serving macros for the finished recipe. These become the recipe’s totals when logged.' }),
+        h('div.inline-fields', {}, aRows.slice(0, 3)),
+        h('div.inline-fields', {}, aRows.slice(3)),
+        oDraft.nutritionRef && oDraft.nutritionRef.energy_kcal
+          ? h('button', { type: 'button', text: 'Use imported (' + num(oDraft.nutritionRef.energy_kcal) + ' kcal)', style: LINK + ';margin:2px 0 8px;display:block',
+              onclick: () => { for (const [k] of OV_FIELDS) if (oDraft.nutritionRef[k] != null) oInputs[k].value = Math.round(oDraft.nutritionRef[k] * 10) / 10; } })
+          : null,
+        h('div.btn-row', { style: 'margin-top:4px' }, [
+          h('button.btn.btn-sm.btn-accent', { type: 'button', text: 'Apply macros', onclick: apply }),
+          h('button.btn.btn-sm.btn-ghost', { type: 'button', text: 'Cancel', onclick: () => { bOverrideEdit = false; repaintTotals(); } }),
+        ]),
+      ]);
     }
 
     async function save() {
       if (!oDraft.name.trim()) { toast('Name the recipe'); return; }
-      if (!oDraft.ingredients.length) { toast('Add at least one ingredient'); return; }
+      if (!oDraft.ingredients.length && !(oDraft.textIngredients || []).length) {
+        toast('Add at least one ingredient'); return;
+      }
       const oBody = {
         name: oDraft.name.trim(),
         servings: Number(oDraft.servings) || 1,
         ingredients: oDraft.ingredients.map((oI) => ({ foodId: oI.foodId, grams: Number(oI.grams) })),
+        textIngredients: oDraft.textIngredients || [],
+        override: oDraft.override || null,
       };
       if (oDraft.id) await guard(api.updateRecipe(oDraft.id, oBody));
       else await guard(api.createRecipe(oBody));
@@ -206,6 +303,7 @@ export async function render(tRoot) {
       oPendingEl,
       h('div.meal-head', { style: 'margin-top:8px' }, [h('span.name', { text: 'Ingredients' })]),
       oIngList,
+      oTextEl,
       h('div.meal-head', { style: 'margin-top:8px' }, [h('span.name', { text: 'Totals' })]),
       oTotalsEl,
       h('div.btn-row', { style: 'margin-top:16px' }, [
@@ -218,6 +316,7 @@ export async function render(tRoot) {
       ]),
     ]);
     repaintPending();
+    repaintText();
     repaintIngredients();
     repaintTotals();
   }
