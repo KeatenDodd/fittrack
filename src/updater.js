@@ -99,16 +99,31 @@ async function checkForUpdate() {
   armSwap(sStaged, process.execPath, process.pid);
 }
 
+// On-demand: download (if needed) then swap + relaunch immediately. Returns
+// false if nothing newer is available. The caller exits the process afterwards
+// so the detached helper can replace the exe and start the new one.
+async function applyUpdate() {
+  if (!oConfig.bSea) return false;
+  if (!oStatus.staged) { try { await checkForUpdate(); } catch (tErr) { /* ignore */ } }
+  const sStaged = path.join(oConfig.sDataDir, 'update', 'FitTrack.exe');
+  if (!oStatus.staged || !fs.existsSync(sStaged)) return false;
+  armSwap(sStaged, process.execPath, process.pid, true); // relaunch after swap
+  return true;
+}
+
 // Detached PowerShell: wait for this process to exit, then replace the exe.
-function armSwap(sStaged, sExe, iPid) {
+// When bRelaunch is set it also starts the freshly-swapped exe (one-click update).
+function armSwap(sStaged, sExe, iPid, bRelaunch) {
   if (process.platform !== 'win32') return;
-  const sPs = [
+  const aLines = [
     "$ErrorActionPreference='SilentlyContinue'",
     'Wait-Process -Id ' + iPid + ' -ErrorAction SilentlyContinue',
-    'Start-Sleep -Milliseconds 600',
+    'Start-Sleep -Milliseconds 700',
     "Copy-Item '" + sStaged.replace(/'/g, "''") + "' '" + sExe.replace(/'/g, "''") + "' -Force",
     "Remove-Item '" + sStaged.replace(/'/g, "''") + "' -Force",
-  ].join('\n');
+  ];
+  if (bRelaunch) aLines.push("Start-Process -FilePath '" + sExe.replace(/'/g, "''") + "'");
+  const sPs = aLines.join('\n');
   try {
     const sEnc = Buffer.from(sPs, 'utf16le').toString('base64');
     spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
@@ -116,4 +131,4 @@ function armSwap(sStaged, sExe, iPid) {
   } catch (tErr) { /* update will just retry next launch */ }
 }
 
-module.exports = { checkForUpdate, getStatus, version: sVersion, repo: sRepo };
+module.exports = { checkForUpdate, applyUpdate, getStatus, version: sVersion, repo: sRepo };

@@ -101,6 +101,24 @@ oApp.get('/api/version', (tReq, tRes) => {
   tRes.json(oStatus);
 });
 
+// Manually check GitHub now (awaits the download), returning fresh status so the
+// UI can flip to "Restart & update now" once a newer build is staged.
+oApp.post('/api/version/check', require('./auth').requireAuth, async (tReq, tRes) => {
+  try { await require('./updater').checkForUpdate(); } catch (tErr) { /* ignore */ }
+  tRes.json(require('./updater').getStatus());
+});
+
+// Apply a staged update and relaunch — the one-click path that avoids the
+// "the server is still running in the background" confusion.
+oApp.post('/api/version/apply', require('./auth').requireAuth, async (tReq, tRes) => {
+  let bOk = false;
+  try { bOk = await require('./updater').applyUpdate(); } catch (tErr) { bOk = false; }
+  if (!bOk) return tRes.status(409).json({ error: 'No update is ready to apply yet' });
+  tRes.json({ ok: true });
+  // Quit so the detached helper can swap the exe and start the new one.
+  setTimeout(() => process.exit(0), 500);
+});
+
 // Serve the mkcert root CA so a phone can install + trust it (needed for native
 // apps like the watch's Health exporter, which won't accept an untrusted cert).
 const sCaRoot = process.env.CAROOT

@@ -75,6 +75,8 @@ export const api = {
   me: () => get('/auth/me'),
   updateProfile: (tBody) => put('/auth/me', tBody),
   appVersion: () => get('/version'),
+  checkUpdate: () => post('/version/check', {}),
+  applyUpdate: () => post('/version/apply', {}),
 
   // menstrual cycle
   cycle: () => get('/cycle'),

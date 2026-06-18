@@ -112,23 +112,60 @@ export async function render(tRoot, tArgs, tCtx) {
     h('div.card', {}, [
       h('div.kv', {}, [h('span.lbl', { text: 'FitTrack version' }),
         h('span.num', { text: oVer && oVer.version ? oVer.version : '—' })]),
-      versionNote(oVer),
+      updateBlock(oVer),
     ]),
   ]);
 }
 
-// Update status line for the About card.
-function versionNote(oVer) {
-  if (!oVer) return null;
-  if (oVer.staged) {
-    return h('div.callout', { style: 'margin-top:10px' }, [
-      h('strong', { text: 'Update ready' + (oVer.latest ? ' (v' + oVer.latest + ')' : '') }),
-      h('p', { style: 'margin:6px 0 0', text: 'Close FitTrack and reopen it to finish updating.' }),
-    ]);
+// Interactive update section for the About card. Lets the user check GitHub and
+// apply a staged update in one click (swap + relaunch), rather than relying on
+// the background server happening to exit.
+function updateBlock(oVerInit) {
+  const oWrap = h('div', { style: 'margin-top:10px' });
+  let oVer = oVerInit;
+
+  async function doCheck(tEvent) {
+    const oBtn = tEvent.currentTarget;
+    oBtn.disabled = true; oBtn.textContent = 'Checking…';
+    try { oVer = await api.checkUpdate(); }
+    catch (tErr) { toast('Check failed'); paint(); return; }
+    toast(oVer.staged ? 'Update found' : "You're up to date");
+    paint();
   }
-  if (oVer.sea && oVer.repoSet) return h('p.faint', { style: 'margin:8px 0 0', text: "You're up to date." });
-  if (oVer.sea && !oVer.repoSet) return h('p.faint', { style: 'margin:8px 0 0', text: 'Auto-update is not configured.' });
-  return h('p.faint', { style: 'margin:8px 0 0', text: 'Running the development server.' });
+
+  async function doApply(tEvent) {
+    tEvent.currentTarget.disabled = true;
+    // The server quits ~0.5s after responding, so this request may resolve or
+    // error as it closes — either way the update is now applying.
+    try { await api.applyUpdate(); } catch (tErr) { /* expected as server exits */ }
+    mount(oWrap, h('div.callout', {}, [
+      h('strong', { text: 'Updating…' }),
+      h('p', { style: 'margin:6px 0 0', text: 'FitTrack is restarting. A new window will open in a few seconds — if it doesn’t, just reopen the app.' }),
+    ]));
+  }
+
+  function paint() {
+    if (!oVer) { mount(oWrap, null); return; }
+    if (oVer.staged) {
+      mount(oWrap, h('div.callout', {}, [
+        h('strong', { text: 'Update ready' + (oVer.latest ? ' (v' + oVer.latest + ')' : '') }),
+        h('p', { style: 'margin:6px 0 8px', text: 'Apply it now — FitTrack will restart and reopen.' }),
+        h('button.btn.btn-accent.btn-sm', { type: 'button', text: 'Restart & update now', onclick: doApply }),
+      ]));
+    } else if (oVer.sea && oVer.repoSet) {
+      mount(oWrap, [
+        h('p.faint', { style: 'margin:8px 0', text: "You're up to date." }),
+        h('button.btn.btn-ghost.btn-sm', { type: 'button', text: 'Check for updates', onclick: doCheck }),
+      ]);
+    } else if (oVer.sea && !oVer.repoSet) {
+      mount(oWrap, h('p.faint', { style: 'margin:8px 0 0', text: 'Auto-update is not configured.' }));
+    } else {
+      mount(oWrap, h('p.faint', { style: 'margin:8px 0 0', text: 'Running the development server.' }));
+    }
+  }
+
+  paint();
+  return oWrap;
 }
 
 function details(sTitle, aSteps) {
