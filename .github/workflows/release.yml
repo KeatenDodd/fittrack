@@ -1,0 +1,57 @@
+name: Release
+
+# Build a fresh FitTrack.exe and publish it as a GitHub Release on every push to
+# main. Installed copies check GitHub Releases on launch and auto-update to the
+# newest one, so a push here = an update for everyone running the app.
+
+on:
+  push:
+    branches: [ main ]
+    # Skip pushes that only touch docs/CI so we don't cut pointless releases.
+    paths-ignore:
+      - '**/*.md'
+      - '.github/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          BASE=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          echo "version=${BASE}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build FitTrack.exe
+        shell: bash
+        env:
+          FITTRACK_VERSION: ${{ steps.ver.outputs.version }}
+        run: npm run build:exe
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          gh release create "$TAG" "dist/FitTrack.exe" \
+            --title "$TAG" \
+            --notes "Automated build from ${GITHUB_SHA::7}. Installed apps update to this on their next launch."

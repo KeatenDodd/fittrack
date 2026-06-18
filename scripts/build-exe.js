@@ -25,6 +25,9 @@ function parseRepo(tRepo) {
   return oM ? oM[1] + '/' + oM[2] : '';
 }
 const sRepo = parseRepo(oPkg.repository);
+// CI stamps an ever-increasing version (e.g. 1.0.<run#>) so each release is
+// "newer" than installed copies; locally we fall back to package.json.
+const sVersion = process.env.FITTRACK_VERSION || oPkg.version;
 
 async function main() {
   // 0) (re)generate favicon.ico + the .exe icon
@@ -32,7 +35,7 @@ async function main() {
   execFileSync(process.execPath, [path.join(__dirname, 'make-icon.js')], { stdio: 'inherit' });
 
   // 1) bundle the server (bake in version + repo for self-update)
-  console.log('2/6  Bundling server with esbuild… (v' + oPkg.version + (sRepo ? ', repo ' + sRepo : ', no repo set') + ')');
+  console.log('2/6  Bundling server with esbuild… (v' + sVersion + (sRepo ? ', repo ' + sRepo : ', no repo set') + ')');
   esbuild.buildSync({
     entryPoints: [path.join(sRoot, 'src', 'server.js')],
     bundle: true,
@@ -42,7 +45,7 @@ async function main() {
     outfile: path.join(sDist, 'bundle.cjs'),
     external: ['node:sqlite', 'node:sea'],
     define: {
-      'process.env.FITTRACK_VERSION': JSON.stringify(oPkg.version),
+      'process.env.FITTRACK_VERSION': JSON.stringify(sVersion),
       'process.env.FITTRACK_REPO': JSON.stringify(sRepo),
     },
     legalComments: 'none',
@@ -92,8 +95,8 @@ async function main() {
       CompanyName: 'FitTrack',
       OriginalFilename: 'FitTrack.exe',
     },
-    'product-version': oPkg.version,
-    'file-version': oPkg.version,
+    'product-version': sVersion,
+    'file-version': sVersion,
   });
 
   console.log('6/6  Injecting blob with postject…');
